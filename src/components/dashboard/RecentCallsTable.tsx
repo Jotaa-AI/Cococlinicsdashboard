@@ -60,7 +60,7 @@ export function RecentCallsTable() {
   }, [supabase, clinicId]);
 
   return (
-    <Table>
+    <Table className="min-w-[680px]">
       <TableHeader>
         <TableRow>
           <TableHead>Fecha</TableHead>

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { DndContext, DragEndEvent, PointerSensor, useDroppable, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, Flame, PhoneCall, Snowflake } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import type { Lead } from "@/lib/types";
@@ -12,81 +11,58 @@ import { LEAD_STATUS_LABELS, type LeadStatus } from "@/lib/constants/lead-status
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Button } from "@/components/ui/button";
-
-const ACTIVE_PIPELINE_ORDER: LeadStatus[] = [
-  "new",
-  "whatsapp_sent",
-  "call_done",
-  "contacted",
-  "visit_scheduled",
-];
-
-const OUTCOME_PIPELINE_ORDER: LeadStatus[] = [
-  "no_response",
-  "not_interested",
-];
-
-const PIPELINE_ORDER: LeadStatus[] = [...ACTIVE_PIPELINE_ORDER, ...OUTCOME_PIPELINE_ORDER];
+const PIPELINE_ORDER: LeadStatus[] = ["new", "whatsapp_sent", "call_done", "contacted", "visit_scheduled", "no_response", "not_interested"];
 
 const STAGE_META: Record<
   LeadStatus,
   {
     mood: string;
-    stripe: string;
+    accent: string;
     badge: "success" | "warning" | "danger" | "default";
     hint: string;
-    kind: "flow" | "outcome";
   }
 > = {
   new: {
-    mood: "Frío",
-    stripe: "border-l-sky-400",
+    mood: "Frio",
+    accent: "border-t-slate-300",
     badge: "default",
     hint: "Lead entrante sin contacto",
-    kind: "flow",
   },
   whatsapp_sent: {
     mood: "Templado",
-    stripe: "border-l-cyan-500",
+    accent: "border-t-sky-400",
     badge: "default",
     hint: "Primer alcance realizado",
-    kind: "flow",
   },
   call_done: {
     mood: "Interés inicial",
-    stripe: "border-l-blue-500",
+    accent: "border-t-blue-500",
     badge: "warning",
     hint: "Llamada ejecutada",
-    kind: "flow",
   },
   contacted: {
     mood: "Caliente",
-    stripe: "border-l-amber-500",
+    accent: "border-t-amber-500",
     badge: "warning",
     hint: "Conversación activa",
-    kind: "flow",
   },
   visit_scheduled: {
     mood: "Muy caliente",
-    stripe: "border-l-emerald-500",
+    accent: "border-t-emerald-500",
     badge: "success",
     hint: "Cita cerrada",
-    kind: "flow",
   },
   no_response: {
     mood: "En pausa",
-    stripe: "border-l-zinc-400",
+    accent: "border-t-zinc-400",
     badge: "danger",
     hint: "No respondió a seguimiento",
-    kind: "outcome",
   },
   not_interested: {
     mood: "Descartado",
-    stripe: "border-l-rose-400",
+    accent: "border-t-rose-400",
     badge: "danger",
     hint: "Rechazo explícito",
-    kind: "outcome",
   },
 };
 
@@ -113,31 +89,23 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
     >
       <div className="flex items-start justify-between gap-3">
         <p className="truncate text-sm font-semibold text-foreground">{lead.full_name || "Lead sin nombre"}</p>
-        <Badge variant="soft" className="max-w-36 shrink-0 truncate">
-          {lead.treatment || "Tratamiento"}
-        </Badge>
+        <Badge variant="soft" className="max-w-32 shrink-0 truncate">{lead.treatment || "Tratamiento"}</Badge>
       </div>
-      <div className="mt-2 flex items-center justify-between">
-        <p className="text-xs text-muted-foreground">{lead.phone || "Sin teléfono"}</p>
+      <div className="mt-1 flex items-center justify-between">
+        <p className="text-xs text-muted-foreground">{lead.phone || "Sin telefono"}</p>
         <p className="text-xs uppercase tracking-wide text-muted-foreground">{lead.source || "meta"}</p>
       </div>
     </button>
   );
 }
 
-function StageSection({
+function StageColumn({
   status,
-  indexLabel,
   leads,
-  collapsed,
-  onToggle,
   onOpen,
 }: {
   status: LeadStatus;
-  indexLabel: string;
   leads: Lead[];
-  collapsed: boolean;
-  onToggle: () => void;
   onOpen: (lead: Lead) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
@@ -146,51 +114,32 @@ function StageSection({
   return (
     <Card
       ref={setNodeRef}
-      className={`overflow-hidden border-l-4 bg-card/80 ${stage.stripe} ${isOver ? "ring-2 ring-primary/30" : ""}`}
+      className={`h-[70vh] min-h-[520px] w-[84vw] max-w-[320px] shrink-0 overflow-hidden border bg-card/80 sm:h-[640px] sm:w-[290px] sm:max-w-none ${stage.accent} border-t-2 ${isOver ? "ring-2 ring-primary/30" : ""}`}
     >
-      <button
-        type="button"
-        onClick={onToggle}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-muted text-[11px] font-semibold text-muted-foreground">
-            {indexLabel}
-          </span>
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">{LEAD_STATUS_LABELS[status]}</p>
-            <p className="truncate text-xs text-muted-foreground">{stage.hint}</p>
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-2">
+      <div className="border-b border-border bg-white px-3 py-3">
+        <p className="truncate text-sm font-semibold">{LEAD_STATUS_LABELS[status]}</p>
+        <p className="text-[11px] text-muted-foreground">{leads.length} oportunidades</p>
+        <div className="mt-2 flex items-center gap-2">
           <Badge variant={stage.badge}>{stage.mood}</Badge>
-          <Badge variant="default">{leads.length} leads</Badge>
+          <p className="truncate text-[11px] text-muted-foreground">{stage.hint}</p>
         </div>
-      </button>
+      </div>
 
-      {!collapsed ? (
-        <div className="border-t border-border bg-muted/10 px-3 py-3">
-          {leads.length ? (
-            <SortableContext items={leads.map((lead) => lead.id)} strategy={verticalListSortingStrategy}>
-              <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {leads.map((lead) => (
-                  <LeadCard key={lead.id} lead={lead} onOpen={onOpen} />
-                ))}
-              </div>
-            </SortableContext>
-          ) : (
-            <p className="rounded-xl border border-dashed border-border bg-white px-3 py-5 text-center text-sm text-muted-foreground">
-              Sin leads en esta etapa
-            </p>
-          )}
-        </div>
-      ) : (
-        <div className="border-t border-border bg-muted/20 px-4 py-2">
-          <p className="text-xs text-muted-foreground">Etapa contraida. Pulsa para desplegar.</p>
-        </div>
-      )}
+      <div className="h-[calc(70vh-56px)] min-h-[464px] overflow-y-auto bg-muted/10 p-2 sm:h-[584px]">
+        {leads.length ? (
+          <SortableContext items={leads.map((lead) => lead.id)} strategy={verticalListSortingStrategy}>
+            <div className="space-y-2">
+              {leads.map((lead) => (
+                <LeadCard key={lead.id} lead={lead} onOpen={onOpen} />
+              ))}
+            </div>
+          </SortableContext>
+        ) : (
+          <p className="rounded-xl border border-dashed border-border bg-white px-3 py-5 text-center text-sm text-muted-foreground">
+            Sin leads en esta etapa
+          </p>
+        )}
+      </div>
     </Card>
   );
 }
@@ -202,12 +151,6 @@ export function PipelineBoard() {
 
   const [leads, setLeads] = useState<Lead[]>([]);
   const [activeLead, setActiveLead] = useState<Lead | null>(null);
-  const [collapsed, setCollapsed] = useState<Record<LeadStatus, boolean>>(() =>
-    PIPELINE_ORDER.reduce((acc, status) => {
-      acc[status] = true;
-      return acc;
-    }, {} as Record<LeadStatus, boolean>)
-  );
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -297,85 +240,20 @@ export function PipelineBoard() {
   return (
     <>
       <div className="mb-4 rounded-xl border border-border bg-muted/20 p-3">
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Snowflake className="h-4 w-4" />
-            <span>Flujo principal: de lead frio a lead caliente</span>
-            <Flame className="h-4 w-4" />
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setCollapsed(
-                  PIPELINE_ORDER.reduce((acc, status) => {
-                    acc[status] = false;
-                    return acc;
-                  }, {} as Record<LeadStatus, boolean>)
-                )
-              }
-            >
-              Desplegar todo
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setCollapsed(
-                  PIPELINE_ORDER.reduce((acc, status) => {
-                    acc[status] = true;
-                    return acc;
-                  }, {} as Record<LeadStatus, boolean>)
-                )
-              }
-            >
-              Contraer todo
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <PhoneCall className="h-4 w-4" />
-          <span>Arrastra tarjetas para cambiar etapa. El total se ve en cada titulo.</span>
-        </div>
+        <p className="text-sm font-semibold">Pipeline por etapas</p>
+        <p className="text-xs text-muted-foreground">
+          Vista tipo kanban. Arrastra tarjetas entre columnas para actualizar estado.
+        </p>
       </div>
 
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="space-y-6">
-          <div className="space-y-3">
-            <div className="px-1">
-              <p className="text-sm font-semibold">Flujo comercial (frio a caliente)</p>
-              <p className="text-xs text-muted-foreground">Etapas activas del lead hasta cierre de cita</p>
-            </div>
-            {ACTIVE_PIPELINE_ORDER.map((status, index) => (
-              <StageSection
+        <div className="overflow-x-auto pb-2">
+          <div className="flex min-w-max gap-3">
+            {PIPELINE_ORDER.map((status) => (
+              <StageColumn
                 key={status}
                 status={status}
-                indexLabel={`${index + 1}`}
                 leads={grouped[status]}
-                collapsed={collapsed[status]}
-                onToggle={() => setCollapsed((prev) => ({ ...prev, [status]: !prev[status] }))}
-                onOpen={setActiveLead}
-              />
-            ))}
-          </div>
-
-          <div className="space-y-3">
-            <div className="px-1">
-              <p className="text-sm font-semibold">Estados de salida</p>
-              <p className="text-xs text-muted-foreground">Leads que han salido del flujo principal</p>
-            </div>
-            {OUTCOME_PIPELINE_ORDER.map((status) => (
-              <StageSection
-                key={status}
-                status={status}
-                indexLabel={STAGE_META[status].kind === "outcome" ? "R" : "-"}
-                leads={grouped[status]}
-                collapsed={collapsed[status]}
-                onToggle={() => setCollapsed((prev) => ({ ...prev, [status]: !prev[status] }))}
                 onOpen={setActiveLead}
               />
             ))}

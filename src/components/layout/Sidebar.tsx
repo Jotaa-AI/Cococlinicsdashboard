@@ -2,16 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Calendar, LayoutDashboard, Phone, Settings, KanbanSquare } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
-
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-  { href: "/calendar", label: "Agenda", icon: Calendar },
-  { href: "/calls", label: "Llamadas", icon: Phone },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
+import { navItems } from "@/components/layout/nav-items";
 
 export function Sidebar() {
   const pathname = usePathname();

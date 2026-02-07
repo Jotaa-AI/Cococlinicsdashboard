@@ -191,7 +191,7 @@ export function KpiGrid() {
             <CardTitle className="text-sm font-medium text-muted-foreground">{card.label}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
-            <p className="font-display text-3xl font-semibold">{card.value}</p>
+            <p className="font-display text-2xl font-semibold sm:text-3xl">{card.value}</p>
             <p className="text-xs text-muted-foreground">{card.note}</p>
           </CardContent>
         </Card>

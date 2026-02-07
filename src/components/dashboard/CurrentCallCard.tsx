@@ -83,7 +83,7 @@ export function CurrentCallCard() {
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between">
+      <CardHeader className="flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
         <CardTitle>En llamada ahora</CardTitle>
         <Badge variant={state?.current_call_retell_id ? "success" : "default"}>
           {state?.current_call_retell_id ? "En llamada" : "Sin llamadas"}

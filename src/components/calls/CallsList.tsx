@@ -98,9 +98,9 @@ export function CallsList() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
         <Select value={dateRange} onValueChange={setDateRange}>
-          <SelectTrigger className="w-40">
+          <SelectTrigger className="w-full sm:w-40">
             <SelectValue placeholder="Rango" />
           </SelectTrigger>
           <SelectContent>
@@ -112,7 +112,7 @@ export function CallsList() {
           </SelectContent>
         </Select>
         <Select value={outcome} onValueChange={setOutcome}>
-          <SelectTrigger className="w-52">
+          <SelectTrigger className="w-full sm:w-52">
             <SelectValue placeholder="Outcome" />
           </SelectTrigger>
           <SelectContent>
@@ -125,13 +125,13 @@ export function CallsList() {
           </SelectContent>
         </Select>
         <Input
-          className="w-64"
+          className="w-full sm:w-64"
           placeholder="Buscar por lead o tratamiento"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
       </div>
-      <Table>
+      <Table className="min-w-[720px]">
         <TableHeader>
           <TableRow>
             <TableHead>Fecha</TableHead>

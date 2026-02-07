@@ -47,7 +47,7 @@ export default function CallDetailPage() {
         ← Volver
       </Button>
       <Card>
-        <CardHeader className="flex-row items-center justify-between">
+        <CardHeader className="flex-col items-start justify-between gap-2 sm:flex-row sm:items-center">
           <CardTitle>Detalle de llamada</CardTitle>
           <Badge variant={call.outcome === "appointment_scheduled" ? "success" : "soft"}>
             {call.outcome && call.outcome in CALL_OUTCOME_LABELS

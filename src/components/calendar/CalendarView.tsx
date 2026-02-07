@@ -387,7 +387,7 @@ const handleDeleteEditor = async () => {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-2">
           <Button type="button" variant="outline" onClick={() => calendarRef.current?.getApi().prev()}>
             ←
@@ -400,7 +400,7 @@ const handleDeleteEditor = async () => {
           </Button>
         </div>
 
-        <p className="font-display text-lg capitalize">{calendarTitle}</p>
+        <p className="font-display text-base capitalize md:text-lg">{calendarTitle}</p>
 
         <div className="flex items-center gap-2">
           <Button
@@ -423,7 +423,7 @@ const handleDeleteEditor = async () => {
       {editor ? (
         <Card className="p-4">
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="md:col-span-2 flex items-center justify-between">
+            <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Detalle de evento</p>
                 <p className="text-sm font-medium">{labelForType(editor.type)}</p>
@@ -478,7 +478,7 @@ const handleDeleteEditor = async () => {
 
             {editorError ? <p className="md:col-span-2 text-sm text-rose-600">{editorError}</p> : null}
 
-          <div className="md:col-span-2 flex items-center justify-end gap-2">
+          <div className="md:col-span-2 flex flex-wrap items-center justify-end gap-2">
             {!editor.readOnly ? (
               <>
                 {editor.type === "busy" ? (
@@ -521,6 +521,7 @@ const handleDeleteEditor = async () => {
         titleFormat={{ year: "numeric", month: "long", day: "numeric" }}
         eventAllow={(_, draggedEvent) => (draggedEvent?.extendedProps?.type || "") !== "google"}
         eventResizableFromStart
+        dayMaxEventRows={2}
         select={handleSelect}
         eventDrop={handleEventDrop}
         eventResize={handleEventDrop}

@@ -7,7 +7,7 @@ export default function PipelinePage() {
       <CardHeader>
         <CardTitle>Pipeline de leads</CardTitle>
       </CardHeader>
-      <div className="px-6 pb-6">
+      <div className="px-3 pb-3 sm:px-6 sm:pb-6">
         <PipelineBoard />
       </div>
     </Card>
