@@ -5,9 +5,9 @@ export const metadata: Metadata = {
   title: "Coco Clinics | Dashboard",
   description: "Dashboard interno para clínica estética",
   icons: {
-    icon: "/icon.svg",
-    shortcut: "/icon.svg",
-    apple: "/icon.svg",
+    icon: "/icon.png",
+    shortcut: "/icon.png",
+    apple: "/icon.png",
   },
 };
 
