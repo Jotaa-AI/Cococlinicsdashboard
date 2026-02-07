@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --font-sans: "DM Sans";
+  --font-display: "Space Grotesk";
+  --background: 34 35% 98%;
+  --foreground: 222 23% 16%;
+  --card: 0 0% 100%;
+  --card-foreground: 222 23% 16%;
+  --primary: 210 40% 24%;
+  --primary-foreground: 0 0% 100%;
+  --muted: 215 14% 92%;
+  --muted-foreground: 215 18% 45%;
+  --accent: 24 35% 88%;
+  --accent-foreground: 222 23% 16%;
+  --border: 220 13% 90%;
+}
+
+* {
+  @apply border-border;
+}
+
+body {
+  @apply bg-background text-foreground antialiased;
+}
+
+.fc {
+  --fc-border-color: hsl(var(--border));
+  --fc-page-bg-color: transparent;
+  --fc-today-bg-color: rgba(241, 228, 216, 0.45);
+  font-family: var(--font-sans);
+}
+
+.fc,
+.fc * {
+  font-family: var(--font-sans), system-ui, sans-serif !important;
+}
+
+.fc .fc-timegrid-slot-label {
+  color: hsl(var(--muted-foreground));
+}
+
+.fc .fc-toolbar-title {
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 1.1rem;
+}
+
+.fc .fc-button {
+  @apply rounded-md border border-border bg-white text-foreground shadow-soft;
+}
+
+.fc .fc-button-primary:not(:disabled).fc-button-active,
+.fc .fc-button-primary:not(:disabled):active {
+  background-color: hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+}
