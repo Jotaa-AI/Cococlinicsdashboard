@@ -8,6 +8,14 @@ export interface Lead {
   treatment: string | null;
   source: string | null;
   status: string;
+  whatsapp_blocked: boolean;
+  whatsapp_blocked_reason: string | null;
+  whatsapp_blocked_at: string | null;
+  whatsapp_blocked_by_user_id: string | null;
+  stage_key: string | null;
+  ab_variant: "A" | "B" | null;
+  last_contact_at: string | null;
+  next_action_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -20,6 +28,7 @@ export interface Call {
   phone: string | null;
   agent_id: string | null;
   status: "in_progress" | "ended";
+  attempt_no: number;
   started_at: string | null;
   ended_at: string | null;
   duration_sec: number | null;
@@ -41,6 +50,7 @@ export interface Appointment {
   status: "scheduled" | "canceled" | "done";
   notes: string | null;
   gcal_event_id: string | null;
+  source_channel: "call_ai" | "whatsapp_ai" | "staff";
   created_by: "agent" | "staff";
   created_at: string;
 }
@@ -81,4 +91,60 @@ export interface Profile {
   clinic_id: string;
   role: "admin" | "staff";
   full_name: string | null;
+}
+
+export interface AgentRuntimeControls {
+  clinic_id: string;
+  calls_agent_active: boolean;
+  whatsapp_agent_active: boolean;
+  hitl_mode_active: boolean;
+  updated_by_user_id: string | null;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface LeadAbTestSettings {
+  id: string;
+  clinic_id: string;
+  is_enabled: boolean;
+  variant_a_weight: number;
+  variant_a_name: string;
+  variant_b_name: string;
+  variant_a_script: string | null;
+  variant_b_script: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeadAbMetricsRow {
+  variant: "A" | "B";
+  assigned_count: number;
+  contacted_count: number;
+  booked_count: number;
+  conversion_pct: number;
+}
+
+export interface LeadStageCatalog {
+  stage_key: string;
+  pipeline_key: string;
+  pipeline_label_es: string;
+  label_es: string;
+  description_es: string | null;
+  pipeline_order: number;
+  order_index: number;
+  is_terminal: boolean;
+  is_active: boolean;
+}
+
+export interface LeadStageHistory {
+  id: string;
+  clinic_id: string;
+  lead_id: string;
+  from_stage_key: string | null;
+  to_stage_key: string;
+  reason: string | null;
+  actor_type: string;
+  actor_id: string | null;
+  meta: Json;
+  created_at: string;
 }

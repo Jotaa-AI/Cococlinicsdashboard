@@ -35,6 +35,46 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ## Base de datos
 Ejecuta el SQL en `supabase/schema.sql` en tu proyecto Supabase. Reemplaza el `user_id` del seed por tu usuario real.
 
+Para activar la agenda en bloques de 30 minutos (09:00-19:00) con bloqueo de solapes:
+
+- abre `supabase/migrations/20260208_schedule_slots.sql`
+- copia su contenido
+- pégalo y ejecútalo en Supabase SQL Editor
+
+Para activar el journey completo de llamadas IA + escalado a WhatsApp:
+
+- abre `supabase/migrations/20260214_lead_journey_pipeline.sql`
+- copia su contenido
+- pégalo y ejecútalo en Supabase SQL Editor
+
+Para activar el control operativo de agentes (pausa llamadas/WhatsApp + bloqueo por lead):
+
+- abre `supabase/migrations/20260214_agent_runtime_controls.sql`
+- copia su contenido
+- pégalo y ejecútalo en Supabase SQL Editor
+
+RPCs clave para n8n:
+
+- `rpc_find_nearest_slots(p_clinic_id, p_requested_start, p_window_hours, p_limit, p_timezone)`
+- `rpc_book_appointment_slot(p_clinic_id, p_lead_id, p_start_at, p_title, p_notes, p_created_by, p_idempotency_key, p_source)`
+- `rpc_transition_lead_stage(p_clinic_id, p_lead_id, p_to_stage_key, p_reason, p_actor_type, p_actor_id, p_meta)`
+
+Comprobaciones útiles para n8n:
+
+- Estado global de agentes:
+```sql
+select calls_agent_active, whatsapp_agent_active, hitl_mode_active
+from agent_runtime_controls
+where clinic_id = 'TU_CLINIC_ID';
+```
+- Bloqueo de WhatsApp por lead:
+```sql
+select whatsapp_blocked
+from leads
+where id = 'TU_LEAD_ID'
+  and clinic_id = 'TU_CLINIC_ID';
+```
+
 ## Instalar dependencias
 ```bash
 npm install

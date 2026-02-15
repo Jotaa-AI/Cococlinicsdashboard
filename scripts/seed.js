@@ -121,9 +121,23 @@ async function ensureSystemState() {
   );
 }
 
+async function ensureAgentRuntimeControls() {
+  await supabase.from("agent_runtime_controls").upsert(
+    {
+      clinic_id: clinicId,
+      calls_agent_active: true,
+      whatsapp_agent_active: true,
+      hitl_mode_active: false,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "clinic_id" }
+  );
+}
+
 async function run() {
   await assertClinic();
   await ensureSystemState();
+  await ensureAgentRuntimeControls();
 
   if (RESET_DEMO) {
     console.log("Resetting existing demo data...");
@@ -147,15 +161,35 @@ async function run() {
     "Radiofrecuencia", "Mesoterapia", "Lifting sin cirugía", "Tratamiento antimanchas"
   ];
 
-  const leadStatuses = [
-    { value: "new", weight: 20 },
-    { value: "whatsapp_sent", weight: 14 },
-    { value: "call_done", weight: 16 },
-    { value: "contacted", weight: 18 },
-    { value: "visit_scheduled", weight: 12 },
-    { value: "no_response", weight: 14 },
-    { value: "not_interested", weight: 6 },
+  const leadStages = [
+    { value: "new_lead", weight: 14 },
+    { value: "first_call_in_progress", weight: 10 },
+    { value: "no_answer_first_call", weight: 10 },
+    { value: "second_call_scheduled", weight: 10 },
+    { value: "second_call_in_progress", weight: 8 },
+    { value: "no_answer_second_call", weight: 8 },
+    { value: "contacting_whatsapp", weight: 10 },
+    { value: "whatsapp_conversation_active", weight: 10 },
+    { value: "whatsapp_followup_pending", weight: 7 },
+    { value: "whatsapp_failed_team_review", weight: 5 },
+    { value: "visit_scheduled", weight: 5 },
+    { value: "not_interested", weight: 3 },
   ];
+
+  const legacyStatusFromStage = {
+    new_lead: "new",
+    first_call_in_progress: "call_done",
+    no_answer_first_call: "no_response",
+    second_call_scheduled: "no_response",
+    second_call_in_progress: "no_response",
+    no_answer_second_call: "no_response",
+    contacting_whatsapp: "whatsapp_sent",
+    whatsapp_conversation_active: "contacted",
+    whatsapp_followup_pending: "whatsapp_sent",
+    whatsapp_failed_team_review: "no_response",
+    visit_scheduled: "visit_scheduled",
+    not_interested: "not_interested",
+  };
 
   const callOutcomes = [
     { value: "contacted", weight: 30 },
@@ -173,13 +207,20 @@ async function run() {
     const createdAt = subDays(new Date(), randInt(0, 50));
     createdAt.setHours(randInt(9, 20), randInt(0, 59), 0, 0);
 
+    const stageKey = weightedPick(leadStages);
+    const whatsappBlocked = Math.random() < 0.08;
     leadRows.push({
       clinic_id: clinicId,
       full_name: `Demo ${name}`,
       phone: `+34${basePhone + i}`,
       treatment: pick(treatments),
       source: "meta",
-      status: weightedPick(leadStatuses),
+      stage_key: stageKey,
+      status: legacyStatusFromStage[stageKey],
+      whatsapp_blocked: whatsappBlocked,
+      whatsapp_blocked_reason: whatsappBlocked ? "Bloqueado manualmente (demo)" : null,
+      whatsapp_blocked_at: whatsappBlocked ? new Date().toISOString() : null,
+      whatsapp_blocked_by_user_id: whatsappBlocked ? createdByUserId : null,
       created_at: createdAt.toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -252,10 +293,10 @@ async function run() {
   for (let i = 0; i < 24; i += 1) {
     const lead = insertedLeads[randInt(0, insertedLeads.length - 1)];
     const day = randInt(0, 45);
-    const hour = randInt(9, 19);
+    const hour = randInt(9, 18);
     const minute = pick([0, 30]);
     const startAt = composeDate(day, hour, minute);
-    const endAt = addMinutes(startAt, pick([30, 45, 60]));
+    const endAt = addMinutes(startAt, 30);
 
     appointments.push({
       clinic_id: clinicId,
@@ -275,7 +316,7 @@ async function run() {
     const day = randInt(-30, -1);
     const hour = randInt(9, 18);
     const startAt = composeDate(day, hour, pick([0, 30]));
-    const endAt = addMinutes(startAt, 45);
+    const endAt = addMinutes(startAt, 30);
 
     appointments.push({
       clinic_id: clinicId,
@@ -305,9 +346,9 @@ async function run() {
 
   for (let i = 0; i < 12; i += 1) {
     const day = randInt(0, 25);
-    const hour = randInt(11, 18);
-    const startAt = composeDate(day, hour, 0);
-    const endAt = addMinutes(startAt, pick([30, 60, 90]));
+    const hour = randInt(9, 18);
+    const startAt = composeDate(day, hour, pick([0, 30]));
+    const endAt = addMinutes(startAt, 30);
 
     busyBlocks.push({
       clinic_id: clinicId,
