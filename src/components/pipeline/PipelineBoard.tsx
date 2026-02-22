@@ -19,7 +19,7 @@ const LEGACY_STAGE_FROM_STATUS: Record<string, string> = {
   call_done: "first_call_in_progress",
   contacted: "whatsapp_conversation_active",
   visit_scheduled: "visit_scheduled",
-  no_response: "no_answer_second_call",
+  no_response: "no_answer_first_call",
   not_interested: "not_interested",
 };
 

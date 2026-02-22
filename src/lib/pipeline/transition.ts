@@ -64,7 +64,7 @@ export function mapCallOutcomeToStage(outcome: string | null, attemptNo: number)
     case "not_interested":
       return "not_interested";
     case "no_response":
-      return attemptNo > 1 ? "no_answer_second_call" : "no_answer_first_call";
+      return "no_answer_first_call";
     case "appointment_proposed":
       return "second_call_scheduled";
     case "contacted":

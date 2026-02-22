@@ -31,6 +31,7 @@ export function CurrentCallCard() {
       .select("id, status, started_at, phone, lead_id")
       .eq("clinic_id", clinicId)
       .eq("status", "in_progress")
+      .is("ended_at", null)
       .order("started_at", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(1);
