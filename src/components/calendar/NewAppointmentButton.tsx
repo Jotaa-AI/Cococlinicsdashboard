@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
@@ -20,27 +21,39 @@ function toTimeInputValue(date: Date) {
 function nextHour(date: Date) {
   const output = new Date(date);
   output.setMinutes(0, 0, 0);
-  output.setHours(output.getHours() + 1);
+  const nextHourValue = output.getHours() + 1;
+  const safeHour = Math.min(Math.max(nextHourValue, OPEN_HOUR), CLOSE_HOUR - 1);
+  output.setHours(safeHour);
   return output;
+}
+
+function addMinutesToTime(value: string, minutes: number) {
+  const [hour, minute] = value.split(":").map(Number);
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  date.setMinutes(date.getMinutes() + minutes);
+  return toTimeInputValue(date);
 }
 
 export function NewAppointmentButton() {
   const now = useMemo(() => new Date(), []);
   const defaultStart = useMemo(() => nextHour(now), [now]);
-  const defaultEnd = useMemo(() => new Date(defaultStart.getTime() + 60 * 60 * 1000), [defaultStart]);
 
   const [open, setOpen] = useState(false);
+  const [patientName, setPatientName] = useState("");
+  const [patientPhone, setPatientPhone] = useState("+34");
   const [date, setDate] = useState(toDateInputValue(defaultStart));
   const [startTime, setStartTime] = useState(toTimeInputValue(defaultStart));
-  const [endTime, setEndTime] = useState(toTimeInputValue(defaultEnd));
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const endTime = useMemo(() => addMinutesToTime(startTime, SLOT_MINUTES), [startTime]);
 
   const resetForm = () => {
+    setPatientName("");
+    setPatientPhone("+34");
     setDate(toDateInputValue(defaultStart));
     setStartTime(toTimeInputValue(defaultStart));
-    setEndTime(toTimeInputValue(defaultEnd));
     setReason("");
     setError(null);
   };
@@ -59,16 +72,31 @@ export function NewAppointmentButton() {
       return;
     }
 
-    const startAt = new Date(`${date}T${startTime}:00`);
-    const endAt = new Date(`${date}T${endTime}:00`);
-
-    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
-      setError("Fecha u hora inválida.");
+    if (!patientName.trim()) {
+      setError("El nombre es obligatorio.");
       return;
     }
 
-    if (endAt <= startAt) {
-      setError("La hora de fin debe ser posterior a la hora de inicio.");
+    if (!/^\+34\d{9}$/.test(patientPhone)) {
+      setError("El teléfono debe tener formato +34XXXXXXXXX.");
+      return;
+    }
+
+    const startAt = new Date(`${date}T${startTime}:00`);
+    if (Number.isNaN(startAt.getTime())) {
+      setError("Fecha u hora invalida.");
+      return;
+    }
+
+    const endAt = new Date(startAt.getTime() + SLOT_MINUTES * 60 * 1000);
+
+    const slot = validateSlotRange({
+      startAt: startAt.toISOString(),
+      endAt: endAt.toISOString(),
+    });
+
+    if (!slot.ok) {
+      setError(slot.error);
       return;
     }
 
@@ -80,8 +108,10 @@ export function NewAppointmentButton() {
         body: JSON.stringify({
           title: reason.trim(),
           notes: reason.trim(),
-          start_at: startAt.toISOString(),
-          end_at: endAt.toISOString(),
+          lead_name: patientName.trim(),
+          lead_phone: patientPhone,
+          start_at: slot.startAt,
+          end_at: slot.endAt,
           created_by: "staff",
         }),
       });
@@ -109,7 +139,44 @@ export function NewAppointmentButton() {
       </div>
 
       {open ? (
-        <form onSubmit={handleSubmit} className="mt-4 grid gap-4 rounded-lg border border-border bg-white p-4 md:grid-cols-4">
+        <form onSubmit={handleSubmit} className="mt-4 grid gap-4 rounded-lg border border-border bg-white p-4 md:grid-cols-6">
+          <div className="space-y-1.5 md:col-span-2">
+            <Label htmlFor="appointment-patient-name">Nombre</Label>
+            <Input
+              id="appointment-patient-name"
+              type="text"
+              placeholder="Nombre del lead"
+              value={patientName}
+              onChange={(event) => setPatientName(event.target.value)}
+              required
+            />
+          </div>
+
+          <div className="space-y-1.5 md:col-span-2">
+            <Label htmlFor="appointment-patient-phone">Teléfono</Label>
+            <Input
+              id="appointment-patient-phone"
+              type="tel"
+              placeholder="+34600111222"
+              value={patientPhone}
+              onChange={(event) => {
+                const digits = event.target.value.replace(/\D/g, "");
+                if (!digits) {
+                  setPatientPhone("+34");
+                  return;
+                }
+
+                if (digits.startsWith("34")) {
+                  setPatientPhone(`+${digits.slice(0, 11)}`);
+                  return;
+                }
+
+                setPatientPhone(`+34${digits.slice(0, 9)}`);
+              }}
+              required
+            />
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="appointment-date">Día</Label>
             <Input
@@ -126,6 +193,9 @@ export function NewAppointmentButton() {
             <Input
               id="appointment-start"
               type="time"
+              min={`${String(OPEN_HOUR).padStart(2, "0")}:00`}
+              max={`${String(CLOSE_HOUR - 1).padStart(2, "0")}:30`}
+              step={1800}
               value={startTime}
               onChange={(event) => setStartTime(event.target.value)}
               required
@@ -138,8 +208,8 @@ export function NewAppointmentButton() {
               id="appointment-end"
               type="time"
               value={endTime}
-              onChange={(event) => setEndTime(event.target.value)}
-              required
+              step={1800}
+              disabled
             />
           </div>
 
@@ -155,9 +225,12 @@ export function NewAppointmentButton() {
             />
           </div>
 
-          {error ? <p className="md:col-span-4 text-sm text-rose-600">{error}</p> : null}
+          {error ? <p className="md:col-span-6 text-sm text-rose-600">{error}</p> : null}
+          <p className="md:col-span-6 text-xs text-muted-foreground">
+            Solo bloques de {SLOT_MINUTES} minutos entre {OPEN_HOUR}:00 y {CLOSE_HOUR}:00.
+          </p>
 
-          <div className="md:col-span-4 flex justify-end gap-2">
+          <div className="md:col-span-6 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={handleClose} disabled={loading}>
               Cancelar
             </Button>

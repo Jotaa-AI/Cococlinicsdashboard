@@ -44,6 +44,8 @@ export interface Appointment {
   id: string;
   clinic_id: string;
   lead_id: string | null;
+  lead_name: string | null;
+  lead_phone: string | null;
   title: string | null;
   start_at: string;
   end_at: string;

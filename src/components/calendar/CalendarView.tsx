@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
 
 interface CalendarEventItem {
   id: string;
@@ -51,6 +52,13 @@ function toIsoFromLocalInput(localValue: string) {
   const date = new Date(localValue);
   if (Number.isNaN(date.getTime())) return null;
   return date.toISOString();
+}
+
+function toLocalInputPlusMinutes(localValue: string, minutes: number) {
+  const baseDate = new Date(localValue);
+  if (Number.isNaN(baseDate.getTime())) return null;
+  const nextDate = new Date(baseDate.getTime() + minutes * 60 * 1000);
+  return toLocalDateTimeInputValue(nextDate.toISOString());
 }
 
 function labelForType(type: EditorState["type"]) {
@@ -174,8 +182,23 @@ export function CalendarView() {
     };
   }, [supabase, clinicId, loadEvents]);
 
-  const handleSelect = async (info: { startStr: string; endStr: string }) => {
+  const handleSelect = async (info: { startStr: string; endStr: string; allDay?: boolean }) => {
     if (!clinicId) return;
+    if (info.allDay) {
+      window.alert("Para crear citas usa la vista semanal por horas.");
+      return;
+    }
+
+    const startDate = new Date(info.startStr);
+    const slot = validateSlotRange({
+      startAt: startDate.toISOString(),
+      endAt: new Date(startDate.getTime() + SLOT_MINUTES * 60 * 1000).toISOString(),
+    });
+
+    if (!slot.ok) {
+      window.alert(slot.error);
+      return;
+    }
 
     const createAppointment = window.confirm("¿Quieres crear una cita? Aceptar = Cita · Cancelar = Bloqueo");
 
@@ -183,29 +206,38 @@ export function CalendarView() {
       const title = window.prompt("Título de la cita", "Cita Coco Clinics");
       if (!title) return;
 
-      await fetch("/api/appointments/create", {
+      const response = await fetch("/api/appointments/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          start_at: info.startStr,
-          end_at: info.endStr,
+          start_at: slot.startAt,
+          end_at: slot.endAt,
           title,
           created_by: "staff",
         }),
       });
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        window.alert(payload.error || "No se pudo crear la cita.");
+      }
       return;
     }
 
     const reason = window.prompt("Motivo del bloqueo", "Bloqueo manual");
     if (!reason) return;
 
-    await supabase.from("busy_blocks").insert({
+    const { error } = await supabase.from("busy_blocks").insert({
       clinic_id: clinicId,
-      start_at: info.startStr,
-      end_at: info.endStr,
+      start_at: slot.startAt,
+      end_at: slot.endAt,
       reason,
       created_by_user_id: profile?.user_id,
     });
+
+    if (error) {
+      window.alert(error.message || "No se pudo crear el bloqueo.");
+    }
   };
 
   const handleEventDrop = async (eventInfo: any) => {
@@ -214,21 +246,45 @@ export function CalendarView() {
     const entityId = event.extendedProps.entityId;
     const startAt = event.start ? event.start.toISOString() : null;
     const endAt = event.end ? event.end.toISOString() : startAt;
+    const slot = validateSlotRange({
+      startAt: String(startAt || ""),
+      endAt: String(endAt || ""),
+    });
+
+    if (!slot.ok) {
+      eventInfo.revert();
+      window.alert(slot.error);
+      return;
+    }
 
     if (type === "busy") {
-      await supabase.from("busy_blocks").update({ start_at: startAt, end_at: endAt }).eq("id", entityId);
+      const { error } = await supabase
+        .from("busy_blocks")
+        .update({ start_at: slot.startAt, end_at: slot.endAt })
+        .eq("id", entityId);
+
+      if (error) {
+        eventInfo.revert();
+        window.alert(error.message || "No se pudo mover el bloqueo.");
+      }
     }
 
     if (type === "appointment") {
-      await fetch("/api/appointments/reschedule", {
+      const response = await fetch("/api/appointments/reschedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           appointment_id: entityId,
-          start_at: startAt,
-          end_at: endAt,
+          start_at: slot.startAt,
+          end_at: slot.endAt,
         }),
       });
+
+      if (!response.ok) {
+        eventInfo.revert();
+        const payload = await response.json().catch(() => ({}));
+        window.alert(payload.error || "No se pudo mover la cita.");
+      }
     }
   };
 
@@ -309,8 +365,9 @@ export function CalendarView() {
       return;
     }
 
-    if (new Date(endAt) <= new Date(startAt)) {
-      setEditorError("La hora de fin debe ser posterior a la hora de inicio.");
+    const slot = validateSlotRange({ startAt, endAt });
+    if (!slot.ok) {
+      setEditorError(slot.error);
       return;
     }
 
@@ -324,8 +381,8 @@ export function CalendarView() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             appointment_id: editor.entityId,
-            start_at: startAt,
-            end_at: endAt,
+            start_at: slot.startAt,
+            end_at: slot.endAt,
             title: editor.title,
             notes: editor.notes,
           }),
@@ -343,8 +400,8 @@ export function CalendarView() {
           .from("busy_blocks")
           .update({
             reason: editor.title,
-            start_at: startAt,
-            end_at: endAt,
+            start_at: slot.startAt,
+            end_at: slot.endAt,
           })
           .eq("id", editor.entityId);
 
@@ -449,7 +506,19 @@ const handleDeleteEditor = async () => {
                 id="event-start"
                 type="datetime-local"
                 value={editor.startAt}
-                onChange={(event) => setEditor((prev) => (prev ? { ...prev, startAt: event.target.value } : prev))}
+                step={1800}
+                onChange={(event) =>
+                  setEditor((prev) => {
+                    if (!prev) return prev;
+                    const nextStart = event.target.value;
+                    const nextEnd = toLocalInputPlusMinutes(nextStart, SLOT_MINUTES);
+                    return {
+                      ...prev,
+                      startAt: nextStart,
+                      endAt: nextEnd || prev.endAt,
+                    };
+                  })
+                }
                 disabled={editor.readOnly || saving}
               />
             </div>
@@ -460,8 +529,8 @@ const handleDeleteEditor = async () => {
                 id="event-end"
                 type="datetime-local"
                 value={editor.endAt}
-                onChange={(event) => setEditor((prev) => (prev ? { ...prev, endAt: event.target.value } : prev))}
-                disabled={editor.readOnly || saving}
+                step={1800}
+                disabled
               />
             </div>
 
@@ -475,6 +544,10 @@ const handleDeleteEditor = async () => {
                 disabled={editor.readOnly || saving || editor.type === "busy"}
               />
             </div>
+
+            <p className="md:col-span-2 text-xs text-muted-foreground">
+              Duracion fija de {SLOT_MINUTES} minutos entre {OPEN_HOUR}:00 y {CLOSE_HOUR}:00.
+            </p>
 
             {editorError ? <p className="md:col-span-2 text-sm text-rose-600">{editorError}</p> : null}
 
@@ -508,6 +581,17 @@ const handleDeleteEditor = async () => {
         events={events}
         selectable
         editable
+        eventDurationEditable={false}
+        allDaySlot={false}
+        slotDuration="00:30:00"
+        snapDuration="00:30:00"
+        slotMinTime="09:00:00"
+        slotMaxTime="19:00:00"
+        businessHours={{
+          daysOfWeek: [1, 2, 3, 4, 5],
+          startTime: "09:00",
+          endTime: "19:00",
+        }}
         slotLabelFormat={{
           hour: "2-digit",
           minute: "2-digit",
@@ -519,7 +603,24 @@ const handleDeleteEditor = async () => {
           hour12: false,
         }}
         titleFormat={{ year: "numeric", month: "long", day: "numeric" }}
-        eventAllow={(_, draggedEvent) => (draggedEvent?.extendedProps?.type || "") !== "google"}
+        eventAllow={(dropInfo, draggedEvent) => {
+          if ((draggedEvent?.extendedProps?.type || "") === "google") return false;
+          if (!dropInfo.start || !dropInfo.end) return false;
+          const slot = validateSlotRange({
+            startAt: dropInfo.start.toISOString(),
+            endAt: dropInfo.end.toISOString(),
+          });
+          return slot.ok;
+        }}
+        selectAllow={(selectInfo) => {
+          if ((selectInfo as any).allDay) return false;
+          if (!selectInfo.start) return false;
+          const slot = validateSlotRange({
+            startAt: selectInfo.start.toISOString(),
+            endAt: new Date(selectInfo.start.getTime() + SLOT_MINUTES * 60 * 1000).toISOString(),
+          });
+          return slot.ok;
+        }}
         eventResizableFromStart
         dayMaxEventRows={2}
         select={handleSelect}

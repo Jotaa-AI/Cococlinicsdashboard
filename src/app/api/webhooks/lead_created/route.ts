@@ -19,6 +19,8 @@ export async function POST(request: Request) {
     treatment: payload.treatment || null,
     source: payload.source || "meta",
     status: payload.status || "new",
+    stage_key: payload.stage_key || "new_lead",
+    ab_variant: payload.ab_variant || null,
     created_at: payload.created_at || new Date().toISOString(),
     updated_at: new Date().toISOString(),
   };

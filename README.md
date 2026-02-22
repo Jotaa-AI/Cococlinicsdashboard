@@ -53,6 +53,13 @@ Para activar el control operativo de agentes (pausa llamadas/WhatsApp + bloqueo 
 - copia su contenido
 - pégalo y ejecútalo en Supabase SQL Editor
 
+Para guardar nombre y teléfono también dentro de `appointments`:
+
+- abre `supabase/migrations/20260216_appointments_contact_fields.sql`
+- copia su contenido
+- pégalo y ejecútalo en Supabase SQL Editor
+- esta migración deja los campos finales como `appointments.lead_name` y `appointments.lead_phone`
+
 RPCs clave para n8n:
 
 - `rpc_find_nearest_slots(p_clinic_id, p_requested_start, p_window_hours, p_limit, p_timezone)`

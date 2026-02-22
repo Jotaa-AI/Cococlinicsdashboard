@@ -12,7 +12,7 @@ import { useProfile } from "@/lib/supabase/useProfile";
 import type { Call } from "@/lib/types";
 
 interface CallRow extends Call {
-  leads?: { full_name: string | null; treatment: string | null } | null;
+  leads?: { full_name: string | null; treatment: string | null; phone: string | null } | null;
 }
 
 export function RecentCallsTable() {
@@ -25,8 +25,9 @@ export function RecentCallsTable() {
     if (!clinicId) return;
     const { data } = await supabase
       .from("calls")
-      .select("id, started_at, duration_sec, outcome, lead_id, leads(full_name, treatment)")
+      .select("id, status, started_at, ended_at, duration_sec, outcome, lead_id, phone, leads(full_name, treatment, phone)")
       .eq("clinic_id", clinicId)
+      .eq("status", "ended")
       .order("started_at", { ascending: false })
       .limit(8);
 
@@ -72,16 +73,17 @@ export function RecentCallsTable() {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {calls.map((call) => (
-          <TableRow key={call.id}>
-            <TableCell>
-              {call.started_at
-                ? format(new Date(call.started_at), "dd MMM · HH:mm", { locale: es })
-                : "-"}
-            </TableCell>
-            <TableCell>{call.leads?.full_name || call.lead_id || "Lead"}</TableCell>
-            <TableCell>{call.leads?.treatment || "—"}</TableCell>
-            <TableCell>{call.duration_sec ? `${Math.round(call.duration_sec / 60)} min` : "—"}</TableCell>
+        {calls.map((call) => {
+          const callDate = call.ended_at || call.started_at;
+
+          return (
+            <TableRow key={call.id}>
+              <TableCell>
+                {callDate ? format(new Date(callDate), "dd MMM · HH:mm", { locale: es }) : "-"}
+              </TableCell>
+              <TableCell>{call.leads?.full_name || call.leads?.phone || call.phone || "Lead"}</TableCell>
+              <TableCell>{call.leads?.treatment || "—"}</TableCell>
+              <TableCell>{call.duration_sec ? `${Math.round(call.duration_sec / 60)} min` : "—"}</TableCell>
               <TableCell>
                 <Badge variant={call.outcome === "appointment_scheduled" ? "success" : "soft"}>
                   {call.outcome && call.outcome in CALL_OUTCOME_LABELS
@@ -89,13 +91,21 @@ export function RecentCallsTable() {
                     : call.outcome || "pendiente"}
                 </Badge>
               </TableCell>
-            <TableCell>
-              <Link className="text-sm font-medium text-primary" href={`/calls/${call.id}`}>
-                Ver detalle
-              </Link>
+              <TableCell>
+                <Link className="text-sm font-medium text-primary" href={`/calls/${call.id}`}>
+                  Ver detalle
+                </Link>
+              </TableCell>
+            </TableRow>
+          );
+        })}
+        {!calls.length ? (
+          <TableRow>
+            <TableCell colSpan={6} className="text-sm text-muted-foreground">
+              Sin llamadas finalizadas todavía.
             </TableCell>
           </TableRow>
-        ))}
+        ) : null}
       </TableBody>
     </Table>
   );

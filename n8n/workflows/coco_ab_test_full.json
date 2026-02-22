@@ -1,0 +1,999 @@
+{
+  "name": "Coco Clinics - AB Meta (Single Trigger)",
+  "nodes": [
+    {
+      "parameters": {
+        "form": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "options": {}
+      },
+      "id": "1",
+      "name": "Facebook Lead Ads Trigger",
+      "type": "n8n-nodes-base.facebookLeadAdsTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1760,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const clinicId = $env.DEFAULT_CLINIC_ID || null;\nif (!clinicId) throw new Error('DEFAULT_CLINIC_ID is required in n8n env');\n\nconst src = $json || {};\nconst fieldData = Array.isArray(src.field_data)\n  ? src.field_data\n  : Array.isArray(src.data?.field_data)\n    ? src.data.field_data\n    : [];\n\nconst readField = (...names) => {\n  for (const n of names) {\n    const row = fieldData.find((f) => String(f.name || '').toLowerCase() === n.toLowerCase());\n    if (row) {\n      if (Array.isArray(row.values) && row.values.length) return row.values[0];\n      if (row.value != null) return row.value;\n    }\n  }\n  return null;\n};\n\nconst fullName = String(readField('full_name', 'nombre', 'name') || src.full_name || src.name || 'Lead Meta').trim();\nconst rawPhone = String(readField('phone_number', 'phone', 'telefono', 'whatsapp') || src.phone || '').trim();\nif (!rawPhone) throw new Error('No phone found in lead payload');\nconst phone = rawPhone.replace(/[^+\\d]/g, '');\nconst treatment = readField('treatment', 'tratamiento') || src.treatment || null;\n\nreturn [{\n  json: {\n    clinic_id: clinicId,\n    full_name: fullName,\n    phone,\n    treatment,\n    source: 'meta',\n    status: 'new',\n    now_iso: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "2",
+      "name": "Normalize Meta Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1520,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = getWorkflowStaticData('global');\nconst current = Number.isInteger(data.ab_counter) ? data.ab_counter : 0;\ndata.ab_counter = current + 1;\nconst variant = data.ab_counter % 2 === 1 ? 'A' : 'B';\nreturn [{ json: { variant, ab_counter: data.ab_counter } }];"
+      },
+      "id": "3",
+      "name": "AB Alternator",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1520,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clinic_id",
+              "condition": "eq",
+              "keyValue": "={{$items('Normalize Meta Lead')[0].json.clinic_id}}"
+            },
+            {
+              "keyName": "phone",
+              "condition": "eq",
+              "keyValue": "={{$items('Normalize Meta Lead')[0].json.phone}}"
+            }
+          ]
+        }
+      },
+      "id": "4",
+      "name": "Supabase Get Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -1260,
+        -120
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $items('Normalize Meta Lead')[0].json;\nconst alt = $items('AB Alternator')[0].json;\nconst existing = $json?.id ? $json : null;\n\nreturn [{\n  json: {\n    clinic_id: lead.clinic_id,\n    full_name: lead.full_name,\n    phone: lead.phone,\n    treatment: lead.treatment,\n    source: lead.source,\n    status: lead.status,\n    now_iso: lead.now_iso,\n    variant: alt.variant,\n    existing_lead_id: existing?.id || null,\n    lead_action: existing?.id ? 'update' : 'create'\n  }\n}];"
+      },
+      "id": "5",
+      "name": "Build Lead Upsert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1020,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.lead_action}}",
+        "rules": [
+          {
+            "operation": "equal",
+            "value2": "update"
+          },
+          {
+            "operation": "equal",
+            "value2": "create"
+          }
+        ]
+      },
+      "id": "6",
+      "name": "Switch Lead Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        -780,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{$json.existing_lead_id}}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "full_name",
+              "fieldValue": "={{$json.full_name}}"
+            },
+            {
+              "fieldId": "treatment",
+              "fieldValue": "={{$json.treatment}}"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "={{$json.source}}"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{$json.now_iso}}"
+            }
+          ]
+        }
+      },
+      "id": "7",
+      "name": "Supabase Update Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -540,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "leads",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clinic_id",
+              "fieldValue": "={{$json.clinic_id}}"
+            },
+            {
+              "fieldId": "full_name",
+              "fieldValue": "={{$json.full_name}}"
+            },
+            {
+              "fieldId": "phone",
+              "fieldValue": "={{$json.phone}}"
+            },
+            {
+              "fieldId": "treatment",
+              "fieldValue": "={{$json.treatment}}"
+            },
+            {
+              "fieldId": "source",
+              "fieldValue": "={{$json.source}}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "={{$json.status}}"
+            },
+            {
+              "fieldId": "created_at",
+              "fieldValue": "={{$json.now_iso}}"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{$json.now_iso}}"
+            }
+          ]
+        }
+      },
+      "id": "8",
+      "name": "Supabase Create Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -540,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "mergeByIndex"
+      },
+      "id": "9",
+      "name": "Merge Lead Upsert",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "leads",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clinic_id",
+              "condition": "eq",
+              "keyValue": "={{$items('Normalize Meta Lead')[0].json.clinic_id}}"
+            },
+            {
+              "keyName": "phone",
+              "condition": "eq",
+              "keyValue": "={{$items('Normalize Meta Lead')[0].json.phone}}"
+            }
+          ]
+        }
+      },
+      "id": "10",
+      "name": "Supabase Get Final Lead",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "if (!$json?.id) throw new Error('Lead not found after upsert');\nconst norm = $items('Normalize Meta Lead')[0].json;\nconst alt = $items('AB Alternator')[0].json;\nreturn [{\n  json: {\n    clinic_id: norm.clinic_id,\n    lead_id: $json.id,\n    full_name: $json.full_name || norm.full_name,\n    phone: $json.phone || norm.phone,\n    treatment: $json.treatment || norm.treatment,\n    variant: alt.variant,\n    now_iso: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "11",
+      "name": "Prepare Lead Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        180,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "tableId": "lead_ab_assignments",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "clinic_id",
+              "condition": "eq",
+              "keyValue": "={{$json.clinic_id}}"
+            },
+            {
+              "keyName": "lead_id",
+              "condition": "eq",
+              "keyValue": "={{$json.lead_id}}"
+            }
+          ]
+        }
+      },
+      "id": "12",
+      "name": "Supabase Get AB Assignment",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        420,
+        -120
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const ctx = $items('Prepare Lead Context')[0].json;\nconst existing = $json?.id ? $json : null;\nreturn [{\n  json: {\n    ...ctx,\n    assignment_id: existing?.id || null,\n    assignment_action: existing?.id ? 'update' : 'create'\n  }\n}];"
+      },
+      "id": "13",
+      "name": "Build Assignment Upsert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$json.assignment_action}}",
+        "rules": [
+          {
+            "operation": "equal",
+            "value2": "update"
+          },
+          {
+            "operation": "equal",
+            "value2": "create"
+          }
+        ]
+      },
+      "id": "14",
+      "name": "Switch Assignment Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        900,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "lead_ab_assignments",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{$json.assignment_id}}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "variant",
+              "fieldValue": "={{$json.variant}}"
+            },
+            {
+              "fieldId": "strategy",
+              "fieldValue": "alternating_counter"
+            },
+            {
+              "fieldId": "assigned_at",
+              "fieldValue": "={{$json.now_iso}}"
+            }
+          ]
+        }
+      },
+      "id": "15",
+      "name": "Supabase Update Assignment",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "lead_ab_assignments",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clinic_id",
+              "fieldValue": "={{$json.clinic_id}}"
+            },
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{$json.lead_id}}"
+            },
+            {
+              "fieldId": "variant",
+              "fieldValue": "={{$json.variant}}"
+            },
+            {
+              "fieldId": "strategy",
+              "fieldValue": "alternating_counter"
+            },
+            {
+              "fieldId": "assigned_at",
+              "fieldValue": "={{$json.now_iso}}"
+            }
+          ]
+        }
+      },
+      "id": "16",
+      "name": "Supabase Create Assignment",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "mergeByIndex"
+      },
+      "id": "17",
+      "name": "Merge Assignment Upsert",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        1380,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "lead_ab_events",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clinic_id",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.clinic_id}}"
+            },
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.lead_id}}"
+            },
+            {
+              "fieldId": "variant",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.variant}}"
+            },
+            {
+              "fieldId": "event_name",
+              "fieldValue": "ab_variant_assigned"
+            },
+            {
+              "fieldId": "channel",
+              "fieldValue": "system"
+            },
+            {
+              "fieldId": "payload",
+              "fieldValue": "={{ { strategy: 'alternating_counter' } }}"
+            }
+          ]
+        }
+      },
+      "id": "18",
+      "name": "Supabase Log Variant Event",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1620,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{$items('Prepare Lead Context')[0].json.variant}}",
+        "rules": [
+          {
+            "operation": "equal",
+            "value2": "A"
+          },
+          {
+            "operation": "equal",
+            "value2": "B"
+          }
+        ]
+      },
+      "id": "19",
+      "name": "Switch Variant",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [
+        1860,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.EVOLUTION_BASE_URL}}/message/sendText/{{$env.EVOLUTION_INSTANCE}}",
+        "method": "POST",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "headerParametersJson": "={\"apikey\":\"{{$env.EVOLUTION_API_KEY}}\",\"Content-Type\":\"application/json\"}",
+        "bodyParametersJson": "={\"number\":\"{{$items('Prepare Lead Context')[0].json.phone}}\",\"text\":\"Hola {{$items('Prepare Lead Context')[0].json.full_name}}. Soy del equipo de Cocó Clinics. En 1 minuto te llamamos para valorar tu caso y resolver dudas.\"}",
+        "options": {}
+      },
+      "id": "20",
+      "name": "WA Aviso 1 Min",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        2100,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 1,
+        "unit": "minutes"
+      },
+      "id": "21",
+      "name": "Wait 1 Minute",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2340,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.RETELL_CREATE_CALL_URL}}",
+        "method": "POST",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "headerParametersJson": "={\"Authorization\":\"Bearer {{$env.RETELL_API_KEY}}\",\"Content-Type\":\"application/json\"}",
+        "bodyParametersJson": "={\"to_number\":\"{{$items('Prepare Lead Context')[0].json.phone}}\",\"lead_id\":\"{{$items('Prepare Lead Context')[0].json.lead_id}}\",\"clinic_id\":\"{{$items('Prepare Lead Context')[0].json.clinic_id}}\",\"context\":{\"ab_variant\":\"A\",\"source\":\"meta\"}}",
+        "options": {}
+      },
+      "id": "22",
+      "name": "Retell Call Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        2580,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "lead_ab_events",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clinic_id",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.clinic_id}}"
+            },
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.lead_id}}"
+            },
+            {
+              "fieldId": "variant",
+              "fieldValue": "A"
+            },
+            {
+              "fieldId": "event_name",
+              "fieldValue": "call_dispatched"
+            },
+            {
+              "fieldId": "channel",
+              "fieldValue": "call"
+            },
+            {
+              "fieldId": "payload",
+              "fieldValue": "={{ { step: 'wa_notice_then_call' } }}"
+            }
+          ]
+        }
+      },
+      "id": "23",
+      "name": "Supabase Log A Event",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2820,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{`Lead: ${$items('Prepare Lead Context')[0].json.full_name}\\nTelefono: ${$items('Prepare Lead Context')[0].json.phone}\\nTratamiento de interes: ${$items('Prepare Lead Context')[0].json.treatment || 'no indicado'}\\nObjetivo: enviar primer mensaje de WhatsApp muy humano para abrir conversacion, preguntar que quiere mejorar, aportar autoridad breve (sin tecnicismos) y cerrar proponiendo cita gratuita con la doctora.`}}",
+        "options": {
+          "systemMessage": "Responde SOLO con texto listo para enviar por WhatsApp en espanol de Espana. Maximo 4 lineas. Estructura obligatoria: 1) apertura humana, 2) pregunta sobre que quiere mejorar, 3) autoridad breve sin tecnicismos, 4) cierre para proponer cita de valoracion gratuita."
+        }
+      },
+      "id": "24",
+      "name": "AI Agent WhatsApp B",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        2100,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4.1-mini"
+        },
+        "options": {}
+      },
+      "id": "25",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $json.output || $json.text || $json.response || '';\nconst fallback = 'Hola, soy del equipo de Cocó Clinics. Queremos entender que te gustaria mejorar para orientarte bien. Lo que cuentas suele tener mejora con tratamiento medico no invasivo, y lo ideal es valorarlo contigo en consulta. Si te parece, te propongo una cita gratuita con la doctora esta semana.';\nreturn [{ json: { wa_text: String(raw || fallback).trim() } }];"
+      },
+      "id": "26",
+      "name": "Build WA Text B",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2340,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$env.EVOLUTION_BASE_URL}}/message/sendText/{{$env.EVOLUTION_INSTANCE}}",
+        "method": "POST",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "headerParametersJson": "={\"apikey\":\"{{$env.EVOLUTION_API_KEY}}\",\"Content-Type\":\"application/json\"}",
+        "bodyParametersJson": "={\"number\":\"{{$items('Prepare Lead Context')[0].json.phone}}\",\"text\":\"{{$json.wa_text}}\"}",
+        "options": {}
+      },
+      "id": "27",
+      "name": "WA Conversacion Inicial",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 1,
+      "position": [
+        2580,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "tableId": "lead_ab_events",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "clinic_id",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.clinic_id}}"
+            },
+            {
+              "fieldId": "lead_id",
+              "fieldValue": "={{$items('Prepare Lead Context')[0].json.lead_id}}"
+            },
+            {
+              "fieldId": "variant",
+              "fieldValue": "B"
+            },
+            {
+              "fieldId": "event_name",
+              "fieldValue": "whatsapp_conversation_started"
+            },
+            {
+              "fieldId": "channel",
+              "fieldValue": "whatsapp"
+            },
+            {
+              "fieldId": "payload",
+              "fieldValue": "={{ { step: 'wa_opening_message_sent' } }}"
+            }
+          ]
+        }
+      },
+      "id": "28",
+      "name": "Supabase Log B Event",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2820,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Facebook Lead Ads Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Meta Lead",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AB Alternator",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Meta Lead": {
+      "main": [
+        [
+          {
+            "node": "Supabase Get Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Get Lead": {
+      "main": [
+        [
+          {
+            "node": "Build Lead Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Lead Upsert": {
+      "main": [
+        [
+          {
+            "node": "Switch Lead Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Lead Action": {
+      "main": [
+        [
+          {
+            "node": "Supabase Update Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase Create Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Supabase Update Lead": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Create Lead": {
+      "main": [
+        [
+          {
+            "node": "Merge Lead Upsert",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Lead Upsert": {
+      "main": [
+        [
+          {
+            "node": "Supabase Get Final Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Get Final Lead": {
+      "main": [
+        [
+          {
+            "node": "Prepare Lead Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Lead Context": {
+      "main": [
+        [
+          {
+            "node": "Supabase Get AB Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Get AB Assignment": {
+      "main": [
+        [
+          {
+            "node": "Build Assignment Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Assignment Upsert": {
+      "main": [
+        [
+          {
+            "node": "Switch Assignment Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Assignment Action": {
+      "main": [
+        [
+          {
+            "node": "Supabase Update Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Supabase Create Assignment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Supabase Update Assignment": {
+      "main": [
+        [
+          {
+            "node": "Merge Assignment Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Create Assignment": {
+      "main": [
+        [
+          {
+            "node": "Merge Assignment Upsert",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Assignment Upsert": {
+      "main": [
+        [
+          {
+            "node": "Supabase Log Variant Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase Log Variant Event": {
+      "main": [
+        [
+          {
+            "node": "Switch Variant",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch Variant": {
+      "main": [
+        [
+          {
+            "node": "WA Aviso 1 Min",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Agent WhatsApp B",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "WA Aviso 1 Min": {
+      "main": [
+        [
+          {
+            "node": "Wait 1 Minute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 1 Minute": {
+      "main": [
+        [
+          {
+            "node": "Retell Call Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retell Call Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Supabase Log A Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent WhatsApp B": {
+      "main": [
+        [
+          {
+            "node": "Build WA Text B",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build WA Text B": {
+      "main": [
+        [
+          {
+            "node": "WA Conversacion Inicial",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WA Conversacion Inicial": {
+      "main": [
+        [
+          {
+            "node": "Supabase Log B Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent WhatsApp B",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "versionId": "2"
+}
