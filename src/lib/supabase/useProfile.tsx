@@ -28,10 +28,30 @@ export function useProfile() {
         .eq("user_id", authData.user.id)
         .single();
 
-      if (!error && isMounted) {
+      if (!error && data && isMounted) {
         setProfile(data as Profile);
+        setLoading(false);
+        return;
       }
+
+      const isMissingProfile = error?.code === "PGRST116";
+      if (isMissingProfile) {
+        const response = await fetch("/api/profile/bootstrap", {
+          method: "POST",
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        const bootstrapped = payload?.profile || null;
+
+        if (isMounted) {
+          setProfile(bootstrapped as Profile | null);
+          setLoading(false);
+        }
+        return;
+      }
+
       if (isMounted) {
+        setProfile(null);
         setLoading(false);
       }
     };

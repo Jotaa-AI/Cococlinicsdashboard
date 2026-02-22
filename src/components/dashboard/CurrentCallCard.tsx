@@ -10,8 +10,10 @@ import { formatDistanceStrict } from "date-fns";
 import { es } from "date-fns/locale";
 import { PhoneCall } from "lucide-react";
 
-interface ActiveCallRow extends Pick<Call, "id" | "status" | "started_at" | "phone"> {
-  leads?: { full_name: string | null; phone: string | null; treatment: string | null } | null;
+interface ActiveCallRow extends Pick<Call, "id" | "status" | "started_at" | "phone" | "lead_id"> {
+  leadName?: string | null;
+  leadPhone?: string | null;
+  leadTreatment?: string | null;
 }
 
 export function CurrentCallCard() {
@@ -26,7 +28,7 @@ export function CurrentCallCard() {
     if (!clinicId) return;
     const { data } = await supabase
       .from("calls")
-      .select("id, status, started_at, phone, leads(full_name, phone, treatment)")
+      .select("id, status, started_at, phone, lead_id")
       .eq("clinic_id", clinicId)
       .eq("status", "in_progress")
       .order("started_at", { ascending: false })
@@ -39,10 +41,30 @@ export function CurrentCallCard() {
       return;
     }
 
-    const lead = Array.isArray(row.leads) ? row.leads[0] : row.leads;
+    let leadName: string | null = null;
+    let leadPhone: string | null = null;
+    let leadTreatment: string | null = null;
+
+    if (row.lead_id) {
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("full_name, phone, treatment")
+        .eq("clinic_id", clinicId)
+        .eq("id", row.lead_id)
+        .maybeSingle();
+
+      if (lead) {
+        leadName = lead.full_name;
+        leadPhone = lead.phone;
+        leadTreatment = lead.treatment;
+      }
+    }
+
     setActiveCall({
       ...row,
-      leads: lead || null,
+      leadName,
+      leadPhone,
+      leadTreatment,
     });
   }, [supabase, clinicId]);
 
@@ -110,17 +132,17 @@ export function CurrentCallCard() {
             <div>
               <p className="text-muted-foreground">Lead</p>
               <p className="text-base font-medium">
-                {activeCall.leads?.full_name || activeCall.phone || "Lead sin nombre"}
+                {activeCall.leadName || activeCall.phone || "Lead sin nombre"}
               </p>
             </div>
             <div className="grid gap-3 md:grid-cols-4">
               <div>
                 <p className="text-muted-foreground">Teléfono</p>
-                <p className="font-medium">{activeCall.leads?.phone || activeCall.phone || "No disponible"}</p>
+                <p className="font-medium">{activeCall.leadPhone || activeCall.phone || "No disponible"}</p>
               </div>
               <div>
                 <p className="text-muted-foreground">Tratamiento</p>
-                <p className="font-medium">{activeCall.leads?.treatment || "No especificado"}</p>
+                <p className="font-medium">{activeCall.leadTreatment || "No especificado"}</p>
               </div>
               <div>
                 <p className="text-muted-foreground">Inicio</p>
