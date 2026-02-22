@@ -2,14 +2,13 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { format } from "date-fns";
-import { es } from "date-fns/locale";
 import { Badge } from "@/components/ui/badge";
 import { CALL_OUTCOME_LABELS } from "@/lib/constants/call-outcomes";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import type { Call } from "@/lib/types";
+import { formatDateTimeEs } from "@/lib/utils/dates";
 
 interface CallRow extends Call {
   leads?: { full_name: string | null; treatment: string | null; phone: string | null } | null;
@@ -79,7 +78,7 @@ export function RecentCallsTable() {
           return (
             <TableRow key={call.id}>
               <TableCell>
-                {callDate ? format(new Date(callDate), "dd MMM · HH:mm", { locale: es }) : "-"}
+                {formatDateTimeEs(callDate)}
               </TableCell>
               <TableCell>{call.leads?.full_name || call.leads?.phone || call.phone || "Lead"}</TableCell>
               <TableCell>{call.leads?.treatment || "—"}</TableCell>

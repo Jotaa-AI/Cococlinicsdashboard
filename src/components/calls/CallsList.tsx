@@ -2,8 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { format } from "date-fns";
-import { es } from "date-fns/locale";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -11,14 +9,18 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { CALL_OUTCOMES, CALL_OUTCOME_LABELS } from "@/lib/constants/call-outcomes";
+import { formatDateTimeEs } from "@/lib/utils/dates";
 
 interface CallRow {
   id: string;
+  status: "in_progress" | "ended";
   started_at: string | null;
+  ended_at: string | null;
+  phone: string | null;
   duration_sec: number | null;
   outcome: string | null;
   agent_id: string | null;
-  leads?: { full_name: string | null; treatment: string | null } | null;
+  leads?: { full_name: string | null; treatment: string | null; phone: string | null } | null;
 }
 
 const DATE_OPTIONS = [
@@ -48,7 +50,7 @@ export function CallsList() {
     if (!clinicId) return;
     let query = supabase
       .from("calls")
-      .select("id, started_at, duration_sec, outcome, agent_id, leads(full_name, treatment)")
+      .select("id, status, started_at, ended_at, phone, duration_sec, outcome, agent_id, leads(full_name, treatment, phone)")
       .eq("clinic_id", clinicId)
       .order("started_at", { ascending: false });
 
@@ -146,11 +148,9 @@ export function CallsList() {
           {calls.map((call) => (
             <TableRow key={call.id}>
               <TableCell>
-                {call.started_at
-                  ? format(new Date(call.started_at), "dd MMM · HH:mm", { locale: es })
-                  : "—"}
+                {formatDateTimeEs(call.started_at)}
               </TableCell>
-              <TableCell>{call.leads?.full_name || "Lead"}</TableCell>
+              <TableCell>{call.leads?.full_name || call.leads?.phone || call.phone || "Lead"}</TableCell>
               <TableCell>{call.leads?.treatment || "—"}</TableCell>
               <TableCell>{call.duration_sec ? `${Math.round(call.duration_sec / 60)} min` : "—"}</TableCell>
               <TableCell>
