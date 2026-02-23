@@ -64,6 +64,7 @@ create table if not exists leads (
   treatment text,
   source text default 'meta',
   status lead_status not null default 'new',
+  contacto_futuro timestamptz,
   whatsapp_blocked boolean not null default false,
   whatsapp_blocked_reason text,
   whatsapp_blocked_at timestamptz,
@@ -76,6 +77,7 @@ create unique index if not exists leads_phone_unique on leads (clinic_id, phone)
 create index if not exists leads_phone_idx on leads (phone);
 create index if not exists leads_created_at_idx on leads (created_at);
 create index if not exists leads_status_idx on leads (status);
+create index if not exists leads_contacto_futuro_idx on leads (clinic_id, contacto_futuro) where contacto_futuro is not null;
 create index if not exists leads_whatsapp_blocked_idx on leads (clinic_id, whatsapp_blocked);
 
 create table if not exists calls (
@@ -206,6 +208,7 @@ alter table if exists appointments
   add column if not exists lead_phone text;
 alter table if exists calendar_events add column if not exists title text;
 alter table if exists leads
+  add column if not exists contacto_futuro timestamptz,
   add column if not exists whatsapp_blocked boolean not null default false,
   add column if not exists whatsapp_blocked_reason text,
   add column if not exists whatsapp_blocked_at timestamptz,

@@ -8,6 +8,7 @@ export interface Lead {
   treatment: string | null;
   source: string | null;
   status: string;
+  contacto_futuro: string | null;
   whatsapp_blocked: boolean;
   whatsapp_blocked_reason: string | null;
   whatsapp_blocked_at: string | null;
