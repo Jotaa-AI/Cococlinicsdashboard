@@ -13,6 +13,15 @@ interface CallDetail extends Call {
   leads?: { full_name: string | null; treatment: string | null; phone: string | null } | null;
 }
 
+function mimeTypeFromUrl(url: string) {
+  const clean = url.split("?")[0].toLowerCase();
+  if (clean.endsWith(".wav")) return "audio/wav";
+  if (clean.endsWith(".mp3")) return "audio/mpeg";
+  if (clean.endsWith(".m4a")) return "audio/mp4";
+  if (clean.endsWith(".ogg")) return "audio/ogg";
+  return undefined;
+}
+
 export default function CallDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -84,9 +93,15 @@ export default function CallDetailPage() {
             <div>
               <p className="text-sm text-muted-foreground">Grabación</p>
               {call.recording_url ? (
-                <a className="text-primary" href={call.recording_url} target="_blank" rel="noreferrer">
-                  Abrir audio
-                </a>
+                <div className="space-y-2">
+                  <audio controls preload="none" className="w-full">
+                    <source src={call.recording_url} type={mimeTypeFromUrl(call.recording_url)} />
+                    Tu navegador no soporta reproducción de audio.
+                  </audio>
+                  <a className="text-sm text-primary" href={call.recording_url} target="_blank" rel="noreferrer">
+                    Abrir audio en pestaña nueva
+                  </a>
+                </div>
               ) : (
                 <span>—</span>
               )}

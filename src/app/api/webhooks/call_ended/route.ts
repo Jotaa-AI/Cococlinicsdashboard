@@ -18,6 +18,12 @@ export async function POST(request: Request) {
 
   const endedAt = payload.ended_at || new Date().toISOString();
   const startedAt = payload.started_at || null;
+  const recordingUrl =
+    payload.recording_url ||
+    payload.recordingUrl ||
+    payload.recording?.url ||
+    payload.recording?.recording_url ||
+    null;
 
   const { data: call } = await supabase
     .from("calls")
@@ -29,7 +35,7 @@ export async function POST(request: Request) {
       transcript: payload.transcript || null,
       summary: payload.summary || null,
       extracted: payload.extracted_fields || null,
-      recording_url: payload.recording_url || null,
+      recording_url: recordingUrl,
     })
     .eq("retell_call_id", payload.call_id)
     .select("*")
@@ -55,7 +61,7 @@ export async function POST(request: Request) {
         summary: payload.summary || null,
         meta: {
           duration_sec: payload.duration || payload.duration_sec || null,
-          recording_url: payload.recording_url || null,
+          recording_url: recordingUrl,
         },
       },
       { onConflict: "clinic_id,retell_call_id" }

@@ -98,6 +98,7 @@ create table if not exists calls (
 
 create index if not exists calls_started_at_idx on calls (started_at);
 create index if not exists calls_outcome_idx on calls (outcome);
+create index if not exists calls_recording_url_idx on calls (clinic_id) where recording_url is not null;
 
 create table if not exists appointments (
   id uuid primary key default gen_random_uuid(),
