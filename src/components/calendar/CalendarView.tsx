@@ -8,7 +8,7 @@ import interactionPlugin from "@fullcalendar/interaction";
 import esLocale from "@fullcalendar/core/locales/es";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
-import type { Appointment, BusyBlock, CalendarEvent } from "@/lib/types";
+import type { Appointment } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,19 +25,18 @@ interface CalendarEventItem {
   borderColor: string;
   textColor: string;
   extendedProps: {
-    type: "appointment" | "busy" | "google";
+    type: "appointment";
     entityId: string;
   };
 }
 
 interface EditorState {
-  type: "appointment" | "busy" | "google";
+  type: "appointment";
   entityId: string;
   title: string;
   startAt: string;
   endAt: string;
   notes: string;
-  readOnly: boolean;
 }
 
 function toLocalDateTimeInputValue(isoValue: string) {
@@ -61,12 +60,6 @@ function toLocalInputPlusMinutes(localValue: string, minutes: number) {
   return toLocalDateTimeInputValue(nextDate.toISOString());
 }
 
-function labelForType(type: EditorState["type"]) {
-  if (type === "appointment") return "Cita";
-  if (type === "busy") return "Bloqueo";
-  return "Google Calendar";
-}
-
 export function CalendarView() {
   const calendarRef = useRef<FullCalendar | null>(null);
   const supabase = createSupabaseBrowserClient();
@@ -80,75 +73,33 @@ export function CalendarView() {
   const [editorError, setEditorError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const buildEvents = useCallback(
-    (appointments: Appointment[], blocks: BusyBlock[], googleEvents: CalendarEvent[]) => {
-      const appts = appointments.map((item) => ({
-        id: `appointment-${item.id}`,
-        title: item.title || "Cita agendada",
-        start: item.start_at,
-        end: item.end_at,
-        backgroundColor: "#2f3e46",
-        borderColor: "#2f3e46",
-        textColor: "#fff",
-        extendedProps: { type: "appointment" as const, entityId: item.id },
-      }));
+  const buildEvents = useCallback((appointments: Appointment[]) => {
+    const appts = appointments.map((item) => ({
+      id: `appointment-${item.id}`,
+      title: item.title || "Cita agendada",
+      start: item.start_at,
+      end: item.end_at,
+      backgroundColor: "#2f3e46",
+      borderColor: "#2f3e46",
+      textColor: "#fff",
+      extendedProps: { type: "appointment" as const, entityId: item.id },
+    }));
 
-      const busy = blocks.map((item) => ({
-        id: `busy-${item.id}`,
-        title: item.reason || "Bloqueo",
-        start: item.start_at,
-        end: item.end_at,
-        backgroundColor: "#e6d8cc",
-        borderColor: "#e6d8cc",
-        textColor: "#2f3e46",
-        extendedProps: { type: "busy" as const, entityId: item.id },
-      }));
-
-      const gcal = googleEvents.map((item) => ({
-        id: `google-${item.id}`,
-        title: item.title || "Ocupado (Google)",
-        start: item.start_at,
-        end: item.end_at,
-        backgroundColor: "#d9e4ef",
-        borderColor: "#d9e4ef",
-        textColor: "#2f3e46",
-        extendedProps: { type: "google" as const, entityId: item.id },
-      }));
-
-      setEvents([...appts, ...busy, ...gcal]);
-    },
-    []
-  );
+    setEvents(appts);
+  }, []);
 
   const loadEvents = useCallback(async () => {
     if (!clinicId || !range) return;
 
-    const [appointments, blocks, googleEvents] = await Promise.all([
-      supabase
-        .from("appointments")
-        .select("*")
-        .eq("clinic_id", clinicId)
-        .lt("start_at", range.end)
-        .gt("end_at", range.start),
-      supabase
-        .from("busy_blocks")
-        .select("*")
-        .eq("clinic_id", clinicId)
-        .lt("start_at", range.end)
-        .gt("end_at", range.start),
-      supabase
-        .from("calendar_events")
-        .select("*")
-        .eq("clinic_id", clinicId)
-        .lt("start_at", range.end)
-        .gt("end_at", range.start),
-    ]);
+    const { data } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("clinic_id", clinicId)
+      .lt("start_at", range.end)
+      .gt("end_at", range.start)
+      .neq("status", "canceled");
 
-    buildEvents(
-      (appointments.data || []) as Appointment[],
-      (blocks.data || []) as BusyBlock[],
-      (googleEvents.data || []) as CalendarEvent[]
-    );
+    buildEvents((data || []) as Appointment[]);
   }, [supabase, clinicId, range, buildEvents]);
 
   useEffect(() => {
@@ -165,80 +116,12 @@ export function CalendarView() {
         { event: "*", schema: "public", table: "appointments", filter: `clinic_id=eq.${clinicId}` },
         loadEvents
       )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "busy_blocks", filter: `clinic_id=eq.${clinicId}` },
-        loadEvents
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "calendar_events", filter: `clinic_id=eq.${clinicId}` },
-        loadEvents
-      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
   }, [supabase, clinicId, loadEvents]);
-
-  const handleSelect = async (info: { startStr: string; endStr: string; allDay?: boolean }) => {
-    if (!clinicId) return;
-    if (info.allDay) {
-      window.alert("Para crear citas usa la vista semanal por horas.");
-      return;
-    }
-
-    const startDate = new Date(info.startStr);
-    const slot = validateSlotRange({
-      startAt: startDate.toISOString(),
-      endAt: new Date(startDate.getTime() + SLOT_MINUTES * 60 * 1000).toISOString(),
-    });
-
-    if (!slot.ok) {
-      window.alert(slot.error);
-      return;
-    }
-
-    const createAppointment = window.confirm("¿Quieres crear una cita? Aceptar = Cita · Cancelar = Bloqueo");
-
-    if (createAppointment) {
-      const title = window.prompt("Título de la cita", "Cita Coco Clinics");
-      if (!title) return;
-
-      const response = await fetch("/api/appointments/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          start_at: slot.startAt,
-          end_at: slot.endAt,
-          title,
-          created_by: "staff",
-        }),
-      });
-
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        window.alert(payload.error || "No se pudo crear la cita.");
-      }
-      return;
-    }
-
-    const reason = window.prompt("Motivo del bloqueo", "Bloqueo manual");
-    if (!reason) return;
-
-    const { error } = await supabase.from("busy_blocks").insert({
-      clinic_id: clinicId,
-      start_at: slot.startAt,
-      end_at: slot.endAt,
-      reason,
-      created_by_user_id: profile?.user_id,
-    });
-
-    if (error) {
-      window.alert(error.message || "No se pudo crear el bloqueo.");
-    }
-  };
 
   const handleEventDrop = async (eventInfo: any) => {
     const event = eventInfo.event;
@@ -255,18 +138,6 @@ export function CalendarView() {
       eventInfo.revert();
       window.alert(slot.error);
       return;
-    }
-
-    if (type === "busy") {
-      const { error } = await supabase
-        .from("busy_blocks")
-        .update({ start_at: slot.startAt, end_at: slot.endAt })
-        .eq("id", entityId);
-
-      if (error) {
-        eventInfo.revert();
-        window.alert(error.message || "No se pudo mover el bloqueo.");
-      }
     }
 
     if (type === "appointment") {
@@ -289,7 +160,7 @@ export function CalendarView() {
   };
 
   const handleEventClick = async (info: any) => {
-    const type = info.event.extendedProps.type as EditorState["type"];
+    const type = info.event.extendedProps.type as "appointment";
     const entityId = info.event.extendedProps.entityId as string;
     setEditorError(null);
 
@@ -309,53 +180,13 @@ export function CalendarView() {
         startAt: toLocalDateTimeInputValue(data.start_at),
         endAt: toLocalDateTimeInputValue(data.end_at),
         notes: data.notes || "",
-        readOnly: false,
       });
       return;
     }
-
-    if (type === "busy") {
-      const { data } = await supabase
-        .from("busy_blocks")
-        .select("id, reason, start_at, end_at")
-        .eq("id", entityId)
-        .single();
-
-      if (!data) return;
-
-      setEditor({
-        type,
-        entityId,
-        title: data.reason || "Bloqueo",
-        startAt: toLocalDateTimeInputValue(data.start_at),
-        endAt: toLocalDateTimeInputValue(data.end_at),
-        notes: "",
-        readOnly: false,
-      });
-      return;
-    }
-
-    const { data } = await supabase
-      .from("calendar_events")
-      .select("id, title, start_at, end_at, status")
-      .eq("id", entityId)
-      .single();
-
-    if (!data) return;
-
-    setEditor({
-      type,
-      entityId,
-      title: data.title || "Evento Google",
-      startAt: toLocalDateTimeInputValue(data.start_at),
-      endAt: toLocalDateTimeInputValue(data.end_at),
-      notes: data.status || "confirmed",
-      readOnly: true,
-    });
   };
 
   const handleSaveEditor = async () => {
-    if (!editor || editor.readOnly) return;
+    if (!editor) return;
 
     const startAt = toIsoFromLocalInput(editor.startAt);
     const endAt = toIsoFromLocalInput(editor.endAt);
@@ -395,46 +226,8 @@ export function CalendarView() {
         }
       }
 
-      if (editor.type === "busy") {
-        const { error } = await supabase
-          .from("busy_blocks")
-          .update({
-            reason: editor.title,
-            start_at: slot.startAt,
-            end_at: slot.endAt,
-          })
-          .eq("id", editor.entityId);
-
-        if (error) {
-          setEditorError(error.message || "No se pudo actualizar el bloqueo.");
-          return;
-        }
-      }
-
       setEditor(null);
       await loadEvents();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-const handleDeleteEditor = async () => {
-  if (!editor || editor.readOnly || editor.type !== "busy") return;
-
-    setSaving(true);
-    setEditorError(null);
-
-    try {
-      if (editor.type === "busy") {
-        const { error } = await supabase.from("busy_blocks").delete().eq("id", editor.entityId);
-        if (error) {
-          setEditorError(error.message || "No se pudo eliminar el bloqueo.");
-          return;
-        }
-      }
-
-    setEditor(null);
-    await loadEvents();
     } finally {
       setSaving(false);
     }
@@ -483,7 +276,7 @@ const handleDeleteEditor = async () => {
             <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Detalle de evento</p>
-                <p className="text-sm font-medium">{labelForType(editor.type)}</p>
+                <p className="text-sm font-medium">Cita</p>
               </div>
               <Button type="button" variant="ghost" onClick={() => setEditor(null)}>
                 Cerrar
@@ -496,7 +289,7 @@ const handleDeleteEditor = async () => {
                 id="event-title"
                 value={editor.title}
                 onChange={(event) => setEditor((prev) => (prev ? { ...prev, title: event.target.value } : prev))}
-                disabled={editor.readOnly || saving}
+                disabled={saving}
               />
             </div>
 
@@ -519,7 +312,7 @@ const handleDeleteEditor = async () => {
                     };
                   })
                 }
-                disabled={editor.readOnly || saving}
+                disabled={saving}
               />
             </div>
 
@@ -541,7 +334,7 @@ const handleDeleteEditor = async () => {
                 rows={3}
                 value={editor.notes}
                 onChange={(event) => setEditor((prev) => (prev ? { ...prev, notes: event.target.value } : prev))}
-                disabled={editor.readOnly || saving || editor.type === "busy"}
+                disabled={saving}
               />
             </div>
 
@@ -552,20 +345,9 @@ const handleDeleteEditor = async () => {
             {editorError ? <p className="md:col-span-2 text-sm text-rose-600">{editorError}</p> : null}
 
           <div className="md:col-span-2 flex flex-wrap items-center justify-end gap-2">
-            {!editor.readOnly ? (
-              <>
-                {editor.type === "busy" ? (
-                  <Button type="button" variant="outline" onClick={handleDeleteEditor} disabled={saving}>
-                    Eliminar
-                  </Button>
-                ) : null}
-                <Button type="button" onClick={handleSaveEditor} disabled={saving}>
-                  {saving ? "Guardando..." : "Guardar cambios"}
-                </Button>
-              </>
-              ) : (
-                <p className="text-sm text-muted-foreground">Evento de Google (solo lectura)</p>
-              )}
+            <Button type="button" onClick={handleSaveEditor} disabled={saving}>
+              {saving ? "Guardando..." : "Guardar cambios"}
+            </Button>
             </div>
           </div>
         </Card>
@@ -579,7 +361,7 @@ const handleDeleteEditor = async () => {
         initialView="dayGridMonth"
         height="auto"
         events={events}
-        selectable
+        selectable={false}
         editable
         eventDurationEditable={false}
         allDaySlot={false}
@@ -603,8 +385,7 @@ const handleDeleteEditor = async () => {
           hour12: false,
         }}
         titleFormat={{ year: "numeric", month: "long", day: "numeric" }}
-        eventAllow={(dropInfo, draggedEvent) => {
-          if ((draggedEvent?.extendedProps?.type || "") === "google") return false;
+        eventAllow={(dropInfo) => {
           if (!dropInfo.start || !dropInfo.end) return false;
           const slot = validateSlotRange({
             startAt: dropInfo.start.toISOString(),
@@ -612,18 +393,8 @@ const handleDeleteEditor = async () => {
           });
           return slot.ok;
         }}
-        selectAllow={(selectInfo) => {
-          if ((selectInfo as any).allDay) return false;
-          if (!selectInfo.start) return false;
-          const slot = validateSlotRange({
-            startAt: selectInfo.start.toISOString(),
-            endAt: new Date(selectInfo.start.getTime() + SLOT_MINUTES * 60 * 1000).toISOString(),
-          });
-          return slot.ok;
-        }}
         eventResizableFromStart
         dayMaxEventRows={2}
-        select={handleSelect}
         eventDrop={handleEventDrop}
         eventResize={handleEventDrop}
         eventClick={handleEventClick}

@@ -33,6 +33,6 @@ export async function GET(request: Request) {
     { onConflict: "clinic_id" }
   );
 
-  const redirectUrl = new URL("/settings", process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000");
+  const redirectUrl = new URL("/calendar", process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000");
   return NextResponse.redirect(redirectUrl);
 }

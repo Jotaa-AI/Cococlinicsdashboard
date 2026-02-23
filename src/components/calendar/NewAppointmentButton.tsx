@@ -102,7 +102,7 @@ export function NewAppointmentButton() {
 
     try {
       setLoading(true);
-      const response = await fetch("/api/appointments/create", {
+      const response = await fetch("/api/appointments/manual-booking", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -118,7 +118,7 @@ export function NewAppointmentButton() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        setError(payload?.error || "No se pudo crear la cita.");
+        setError(payload?.error || "No se pudo enviar la cita a n8n.");
         return;
       }
 

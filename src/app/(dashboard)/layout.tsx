@@ -1,7 +1,6 @@
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { MobileNav } from "@/components/layout/MobileNav";
-import { GoogleCalendarAutoSync } from "@/components/calendar/GoogleCalendarAutoSync";
 
 export default function DashboardLayout({
   children,
@@ -10,7 +9,6 @@ export default function DashboardLayout({
 }) {
   return (
     <div className="flex min-h-screen bg-background">
-      <GoogleCalendarAutoSync />
       <div className="hidden lg:block">
         <Sidebar />
       </div>

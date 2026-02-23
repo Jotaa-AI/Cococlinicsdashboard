@@ -35,9 +35,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="rounded-lg bg-muted px-4 py-3 text-xs text-muted-foreground">
-        Realtime activado · Supabase
-      </div>
     </aside>
   );
 }
