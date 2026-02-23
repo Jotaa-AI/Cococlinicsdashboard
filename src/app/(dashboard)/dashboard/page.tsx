@@ -12,7 +12,7 @@ export default function DashboardPage() {
         <CurrentCallCard />
         <Card>
           <CardHeader>
-            <CardTitle>Leads de la semana</CardTitle>
+            <CardTitle>Leads del mes</CardTitle>
           </CardHeader>
           <div className="px-3 pb-3 sm:px-6 sm:pb-6">
             <LeadsChart />
