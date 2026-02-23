@@ -23,6 +23,15 @@ const LEGACY_STAGE_FROM_STATUS: Record<string, string> = {
   not_interested: "not_interested",
 };
 
+const HIDDEN_PIPELINES = new Set(["whatsapp_ai"]);
+
+const STAGE_REDIRECT_WHEN_HIDDEN: Record<string, string> = {
+  contacting_whatsapp: "no_answer_second_call",
+  whatsapp_conversation_active: "no_answer_second_call",
+  whatsapp_followup_pending: "no_answer_second_call",
+  whatsapp_failed_team_review: "no_answer_second_call",
+};
+
 const FALLBACK_STAGES: LeadStageCatalog[] = [
   {
     stage_key: "new_lead",
@@ -278,34 +287,51 @@ export function PipelineBoard() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
+  const visibleStages = useMemo(() => {
+    return stages.filter((stage) => !HIDDEN_PIPELINES.has(stage.pipeline_key));
+  }, [stages]);
+
   const stageMap = useMemo(() => {
     const map = new Map<string, LeadStageCatalog>();
-    for (const stage of stages) {
+    for (const stage of visibleStages) {
       map.set(stage.stage_key, stage);
     }
     return map;
-  }, [stages]);
+  }, [visibleStages]);
+
+  const resolveStageKey = useCallback(
+    (lead: Pick<Lead, "stage_key" | "status">) => {
+      const current = lead.stage_key || "";
+      if (current && stageMap.has(current)) return current;
+
+      const redirected = STAGE_REDIRECT_WHEN_HIDDEN[current];
+      if (redirected && stageMap.has(redirected)) return redirected;
+
+      const legacy = LEGACY_STAGE_FROM_STATUS[lead.status] || "new_lead";
+      if (stageMap.has(legacy)) return legacy;
+
+      return visibleStages[0]?.stage_key || "new_lead";
+    },
+    [stageMap, visibleStages]
+  );
 
   const grouped = useMemo(() => {
     const map: Record<string, Lead[]> = {};
-    for (const stage of stages) {
+    for (const stage of visibleStages) {
       map[stage.stage_key] = [];
     }
 
     for (const lead of leads) {
-      const leadStage = lead.stage_key || "";
-      const stageKey = stageMap.has(leadStage)
-        ? leadStage
-        : LEGACY_STAGE_FROM_STATUS[lead.status] || "new_lead";
+      const stageKey = resolveStageKey(lead);
       if (map[stageKey]) map[stageKey].push({ ...lead, stage_key: stageKey });
     }
 
     return map;
-  }, [leads, stages, stageMap]);
+  }, [leads, visibleStages, resolveStageKey]);
 
   const pipelines = useMemo(() => {
     const map = new Map<string, LeadStageCatalog[]>();
-    for (const stage of stages) {
+    for (const stage of visibleStages) {
       const list = map.get(stage.pipeline_key) || [];
       list.push(stage);
       map.set(stage.pipeline_key, list);
@@ -316,7 +342,7 @@ export function PipelineBoard() {
       const orderB = Math.min(...b[1].map((stage) => stage.pipeline_order));
       return orderA - orderB;
     });
-  }, [stages]);
+  }, [visibleStages]);
 
   const loadStages = useCallback(async () => {
     const { data } = await supabase
@@ -420,11 +446,11 @@ export function PipelineBoard() {
     } else {
       const overLead = leads.find((lead) => lead.id === overId);
       if (overLead) {
-        newStage = overLead.stage_key || LEGACY_STAGE_FROM_STATUS[overLead.status] || "new_lead";
+        newStage = resolveStageKey(overLead);
       }
     }
 
-    const currentStage = currentLead.stage_key || LEGACY_STAGE_FROM_STATUS[currentLead.status] || "new_lead";
+    const currentStage = resolveStageKey(currentLead);
     if (!newStage || newStage === currentStage) return;
 
     const newStatus = LEGACY_STATUS_FROM_STAGE[newStage] || currentLead.status;
@@ -507,9 +533,7 @@ export function PipelineBoard() {
     <>
       <div className="mb-4 rounded-xl border border-border bg-muted/20 p-3">
         <p className="text-sm font-semibold">Pipeline por etapas dinámicas</p>
-        <p className="text-xs text-muted-foreground">
-          Gestión completa del journey: llamada IA, escalado a WhatsApp y cierre.
-        </p>
+        <p className="text-xs text-muted-foreground">Vista principal de llamadas y cierre.</p>
       </div>
 
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
@@ -563,7 +587,7 @@ export function PipelineBoard() {
                 <Card className="p-4">
                   <p className="text-xs text-muted-foreground">Etapa actual</p>
                   <p className="text-sm font-medium">
-                    {stageMap.get(activeLead.stage_key || "")?.label_es || activeLead.stage_key || "Sin etapa"}
+                    {stageMap.get(resolveStageKey(activeLead))?.label_es || resolveStageKey(activeLead) || "Sin etapa"}
                   </p>
                 </Card>
                 <Card className="p-4">
