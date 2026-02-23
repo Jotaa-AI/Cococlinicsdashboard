@@ -1,7 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { addMonths, format, startOfMonth } from "date-fns";
+import { es } from "date-fns/locale";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { isoFromDaysAgo, isoStartOfToday } from "@/lib/utils/dates";
 import { useProfile } from "@/lib/supabase/useProfile";
@@ -14,20 +18,29 @@ interface KpiValues {
   appointments: number;
   noResponse: number;
   callCostTotal: number;
-  successfulCalls: number;
-  successfulCallsRevenue: number;
+  scheduledAppointmentsInMonth: number;
+  scheduledAppointmentsRevenueInMonth: number;
   avgTreatmentPrice: number;
 }
 
-const currencyFormatter = new Intl.NumberFormat("es-ES", {
+const currencyRoundedFormatter = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
-  maximumFractionDigits: 0,
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+const currencyPreciseFormatter = new Intl.NumberFormat("es-ES", {
+  style: "currency",
+  currency: "EUR",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
 });
 
 export function KpiGrid() {
   const supabase = createSupabaseBrowserClient();
   const { profile } = useProfile();
+  const [selectedMonth, setSelectedMonth] = useState(() => startOfMonth(new Date()));
   const [kpis, setKpis] = useState<KpiValues>({
     leadsToday: 0,
     leads7d: 0,
@@ -36,8 +49,8 @@ export function KpiGrid() {
     appointments: 0,
     noResponse: 0,
     callCostTotal: 0,
-    successfulCalls: 0,
-    successfulCallsRevenue: 0,
+    scheduledAppointmentsInMonth: 0,
+    scheduledAppointmentsRevenueInMonth: 0,
     avgTreatmentPrice: 399,
   });
 
@@ -48,6 +61,20 @@ export function KpiGrid() {
     return Number.isFinite(parsed) ? parsed : null;
   }, []);
 
+  const monthLabel = useMemo(() => {
+    const label = format(selectedMonth, "MMMM yyyy", { locale: es });
+    return label.charAt(0).toUpperCase() + label.slice(1);
+  }, [selectedMonth]);
+
+  const monthRange = useMemo(() => {
+    const start = startOfMonth(selectedMonth);
+    const end = addMonths(start, 1);
+    return {
+      startIso: start.toISOString(),
+      endIso: end.toISOString(),
+    };
+  }, [selectedMonth]);
+
   const loadKpis = useCallback(async () => {
     if (!clinicId) return;
 
@@ -55,7 +82,17 @@ export function KpiGrid() {
     const last7 = isoFromDaysAgo(7);
     const last30 = isoFromDaysAgo(30);
 
-    const [leadsToday, leads7d, leads30d, contacted, noResponse, appointments, successfulCalls, clinic, endedCalls] =
+    const [
+      leadsToday,
+      leads7d,
+      leads30d,
+      contacted,
+      noResponse,
+      appointments,
+      appointmentsInMonth,
+      clinic,
+      endedCallsInMonth,
+    ] =
       await Promise.all([
       supabase
         .from("leads")
@@ -91,17 +128,20 @@ export function KpiGrid() {
         .eq("status", "scheduled")
         .gte("start_at", new Date().toISOString()),
       supabase
-        .from("calls")
+        .from("appointments")
         .select("id", { count: "exact", head: true })
         .eq("clinic_id", clinicId)
-        .eq("status", "ended")
-        .eq("outcome", "appointment_scheduled"),
+        .neq("status", "canceled")
+        .gte("start_at", monthRange.startIso)
+        .lt("start_at", monthRange.endIso),
       supabase.from("clinics").select("avg_treatment_price_eur").eq("id", clinicId).maybeSingle(),
       supabase
         .from("calls")
         .select("duration_sec, call_cost_eur")
         .eq("clinic_id", clinicId)
         .eq("status", "ended")
+        .gte("ended_at", monthRange.startIso)
+        .lt("ended_at", monthRange.endIso)
         .order("ended_at", { ascending: false }),
     ]);
 
@@ -114,7 +154,7 @@ export function KpiGrid() {
       return null;
     };
 
-    const totalCallCost = (endedCalls.data || []).reduce((acc, row) => {
+    const totalCallCost = (endedCallsInMonth.data || []).reduce((acc, row) => {
       const persistedCost = parseNumeric(row.call_cost_eur);
       if (persistedCost !== null) return acc + persistedCost;
       if (!callCostPerMin) return acc;
@@ -122,7 +162,7 @@ export function KpiGrid() {
     }, 0);
 
     const avgTreatmentPrice = parseNumeric(clinic.data?.avg_treatment_price_eur) ?? 399;
-    const successfulCallsCount = successfulCalls.count || 0;
+    const scheduledAppointmentsInMonth = appointmentsInMonth.count || 0;
 
     const leads30 = leads30d.count || 0;
     const contactedRate = leads30 ? Math.round(((contacted.count || 0) / leads30) * 100) : 0;
@@ -135,11 +175,11 @@ export function KpiGrid() {
       appointments: appointments.count || 0,
       noResponse: noResponse.count || 0,
       callCostTotal: Number(totalCallCost.toFixed(2)),
-      successfulCalls: successfulCallsCount,
-      successfulCallsRevenue: Number((successfulCallsCount * avgTreatmentPrice).toFixed(2)),
+      scheduledAppointmentsInMonth,
+      scheduledAppointmentsRevenueInMonth: Number((scheduledAppointmentsInMonth * avgTreatmentPrice).toFixed(2)),
       avgTreatmentPrice: Number(avgTreatmentPrice.toFixed(2)),
     });
-  }, [supabase, clinicId, callCostPerMin]);
+  }, [supabase, clinicId, callCostPerMin, monthRange.startIso, monthRange.endIso]);
 
   useEffect(() => {
     loadKpis();
@@ -204,29 +244,52 @@ export function KpiGrid() {
     },
     {
       label: "Coste total llamadas",
-      value: currencyFormatter.format(kpis.callCostTotal),
-      note: "Acumulado",
+      value: currencyPreciseFormatter.format(kpis.callCostTotal),
+      note: monthLabel,
     },
     {
       label: "Valor llamadas exitosas",
-      value: currencyFormatter.format(kpis.successfulCallsRevenue),
-      note: `${kpis.successfulCalls} cierres x ${currencyFormatter.format(kpis.avgTreatmentPrice)}`,
+      value: currencyRoundedFormatter.format(kpis.scheduledAppointmentsRevenueInMonth),
+      note: `${kpis.scheduledAppointmentsInMonth} citas x ${currencyRoundedFormatter.format(kpis.avgTreatmentPrice)} · ${monthLabel}`,
     },
   ];
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-      {cards.map((card) => (
-        <Card key={card.label}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">{card.label}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-1">
-            <p className="font-display text-2xl font-semibold sm:text-3xl">{card.value}</p>
-            <p className="text-xs text-muted-foreground">{card.note}</p>
-          </CardContent>
-        </Card>
-      ))}
+    <div className="space-y-4">
+      <div className="flex items-center justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 w-8"
+          onClick={() => setSelectedMonth((prev) => addMonths(prev, -1))}
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <p className="min-w-40 text-center text-sm font-medium text-muted-foreground">{monthLabel}</p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 w-8"
+          onClick={() => setSelectedMonth((prev) => addMonths(prev, 1))}
+        >
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {cards.map((card) => (
+          <Card key={card.label}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">{card.label}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <p className="font-display text-2xl font-semibold sm:text-3xl">{card.value}</p>
+              <p className="text-xs text-muted-foreground">{card.note}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
