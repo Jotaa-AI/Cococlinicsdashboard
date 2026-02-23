@@ -44,6 +44,7 @@ END $$;
 create table if not exists clinics (
   id uuid primary key default gen_random_uuid(),
   name text not null,
+  avg_treatment_price_eur numeric(10,2) not null default 399,
   created_at timestamptz default now()
 );
 
@@ -160,6 +161,10 @@ create index if not exists calendar_events_start_at_idx on calendar_events (star
 
 -- Backward-compatible upgrades for existing databases
 alter table if exists appointments add column if not exists title text;
+alter table if exists clinics add column if not exists avg_treatment_price_eur numeric(10,2) not null default 399;
+update clinics
+set avg_treatment_price_eur = 399
+where avg_treatment_price_eur is null;
 
 do $$
 begin
