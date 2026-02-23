@@ -18,25 +18,40 @@ export async function POST(request: Request) {
 
   const endedAt = payload.ended_at || new Date().toISOString();
   const startedAt = payload.started_at || null;
+  const durationSec = Number(payload.duration || payload.duration_sec || 0) || null;
   const recordingUrl =
     payload.recording_url ||
     payload.recordingUrl ||
     payload.recording?.url ||
     payload.recording?.recording_url ||
     null;
+  const providedCostRaw = payload.call_cost_eur ?? payload.call_cost ?? payload.cost_eur ?? payload.cost ?? null;
+  const providedCost = Number(providedCostRaw);
+  const costPerMin = Number(process.env.CALL_COST_PER_MIN || process.env.NEXT_PUBLIC_CALL_COST_PER_MIN || 0);
+  const estimatedCost =
+    durationSec && Number.isFinite(costPerMin) && costPerMin > 0
+      ? Number(((durationSec / 60) * costPerMin).toFixed(4))
+      : null;
+  const callCostEur = Number.isFinite(providedCost) ? Number(providedCost.toFixed(4)) : estimatedCost;
+
+  const updatePayload: Record<string, unknown> = {
+    status: "ended",
+    ended_at: endedAt,
+    duration_sec: durationSec,
+    outcome: payload.outcome || null,
+    transcript: payload.transcript || null,
+    summary: payload.summary || null,
+    extracted: payload.extracted_fields || null,
+    recording_url: recordingUrl,
+  };
+
+  if (callCostEur !== null) {
+    updatePayload.call_cost_eur = callCostEur;
+  }
 
   const { data: call } = await supabase
     .from("calls")
-    .update({
-      status: "ended",
-      ended_at: endedAt,
-      duration_sec: payload.duration || payload.duration_sec || null,
-      outcome: payload.outcome || null,
-      transcript: payload.transcript || null,
-      summary: payload.summary || null,
-      extracted: payload.extracted_fields || null,
-      recording_url: recordingUrl,
-    })
+    .update(updatePayload)
     .eq("retell_call_id", payload.call_id)
     .select("*")
     .single();
@@ -60,8 +75,9 @@ export async function POST(request: Request) {
         outcome,
         summary: payload.summary || null,
         meta: {
-          duration_sec: payload.duration || payload.duration_sec || null,
+          duration_sec: durationSec,
           recording_url: recordingUrl,
+          call_cost_eur: callCostEur,
         },
       },
       { onConflict: "clinic_id,retell_call_id" }

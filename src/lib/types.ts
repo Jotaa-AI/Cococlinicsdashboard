@@ -32,6 +32,7 @@ export interface Call {
   started_at: string | null;
   ended_at: string | null;
   duration_sec: number | null;
+  call_cost_eur: number | string | null;
   outcome: string | null;
   transcript: string | null;
   summary: string | null;

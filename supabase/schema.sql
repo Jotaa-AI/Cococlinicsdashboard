@@ -88,6 +88,7 @@ create table if not exists calls (
   started_at timestamptz,
   ended_at timestamptz,
   duration_sec int,
+  call_cost_eur numeric(10,4),
   outcome text,
   transcript text,
   summary text,

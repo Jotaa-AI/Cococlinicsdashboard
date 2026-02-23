@@ -13,6 +13,13 @@ interface CallDetail extends Call {
   leads?: { full_name: string | null; treatment: string | null; phone: string | null } | null;
 }
 
+const eurFormatter = new Intl.NumberFormat("es-ES", {
+  style: "currency",
+  currency: "EUR",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+});
+
 function mimeTypeFromUrl(url: string) {
   const clean = url.split("?")[0].toLowerCase();
   if (clean.endsWith(".wav")) return "audio/wav";
@@ -27,6 +34,7 @@ export default function CallDetailPage() {
   const router = useRouter();
   const supabase = createSupabaseBrowserClient();
   const [call, setCall] = useState<CallDetail | null>(null);
+  const callCostPerMin = Number(process.env.NEXT_PUBLIC_CALL_COST_PER_MIN || 0);
 
   useEffect(() => {
     const loadCall = async () => {
@@ -49,6 +57,24 @@ export default function CallDetailPage() {
   if (!call) {
     return <div className="text-sm text-muted-foreground">Cargando detalle...</div>;
   }
+
+  const persistedCost =
+    typeof call.call_cost_eur === "number"
+      ? call.call_cost_eur
+      : typeof call.call_cost_eur === "string"
+        ? Number(call.call_cost_eur)
+        : null;
+  const estimatedCost =
+    !persistedCost && call.duration_sec && Number.isFinite(callCostPerMin) && callCostPerMin > 0
+      ? (call.duration_sec / 60) * callCostPerMin
+      : null;
+  const hasPersistedCost = persistedCost !== null && Number.isFinite(persistedCost);
+  const displayedCost = hasPersistedCost ? persistedCost : estimatedCost;
+  const costHint = hasPersistedCost
+    ? "Coste registrado"
+    : estimatedCost
+      ? "Coste estimado"
+      : "Sin coste";
 
   return (
     <div className="space-y-6">
@@ -79,7 +105,7 @@ export default function CallDetailPage() {
               <p className="text-base font-medium">{call.leads?.treatment || "—"}</p>
             </div>
           </div>
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid gap-4 md:grid-cols-4">
             <div>
               <p className="text-sm text-muted-foreground">Duración</p>
               <p className="text-base font-medium">
@@ -89,6 +115,13 @@ export default function CallDetailPage() {
             <div>
               <p className="text-sm text-muted-foreground">Estado</p>
               <p className="text-base font-medium">{call.status}</p>
+            </div>
+            <div>
+              <p className="text-sm text-muted-foreground">Coste llamada</p>
+              <p className="text-base font-medium">
+                {displayedCost !== null ? eurFormatter.format(displayedCost) : "—"}
+              </p>
+              <p className="text-xs text-muted-foreground">{costHint}</p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Grabación</p>
