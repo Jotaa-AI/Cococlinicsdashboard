@@ -65,6 +65,8 @@ export interface BusyBlock {
   start_at: string;
   end_at: string;
   reason: string | null;
+  cal_block_group_id: string | null;
+  cal_booking_uids: Json | null;
   created_at: string;
   created_by_user_id: string | null;
 }

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
+import { SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 
 function normalizeEsPhone(rawPhone: string) {
   const trimmed = rawPhone.trim();
@@ -22,6 +22,106 @@ function getWebhookUrl() {
     process.env.N8N_MANUAL_BOOKING_WEBHOOK_URL ||
     "https://personal-n8n.brtnrr.easypanel.host/webhook/agendamiento%20manual"
   );
+}
+
+function getCalConfig() {
+  return {
+    apiBaseUrl: process.env.CAL_API_BASE_URL || "https://api.cal.com/v2",
+    apiKey: process.env.CAL_API_KEY || "",
+    apiVersion: process.env.CAL_API_VERSION || "2024-08-13",
+    eventTypeId: Number(process.env.CAL_BUSY_BLOCK_EVENT_TYPE_ID || 0),
+    attendeeName: process.env.CAL_BLOCKING_ATTENDEE_NAME || "Bloqueo interno",
+    attendeeEmail:
+      process.env.CAL_BLOCKING_ATTENDEE_EMAIL || "bloqueos-coco-clinics@invalid.local",
+  };
+}
+
+function splitInThirtyMinuteSlots(startIso: string, endIso: string) {
+  const slots: Array<{ start: string; end: string }> = [];
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  let cursor = new Date(start);
+
+  while (cursor < end) {
+    const next = new Date(cursor.getTime() + SLOT_MINUTES * 60 * 1000);
+    if (next > end) break;
+    slots.push({ start: cursor.toISOString(), end: next.toISOString() });
+    cursor = next;
+  }
+
+  return slots;
+}
+
+async function createCalBookingSlot(params: {
+  apiBaseUrl: string;
+  apiKey: string;
+  apiVersion: string;
+  eventTypeId: number;
+  startIso: string;
+  reason: string;
+  blockGroupId: string;
+  attendeeName: string;
+  attendeeEmail: string;
+  slotIndex: number;
+}) {
+  const response = await fetch(`${params.apiBaseUrl}/bookings`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json",
+      "cal-api-version": params.apiVersion,
+    },
+    body: JSON.stringify({
+      start: params.startIso,
+      eventTypeId: params.eventTypeId,
+      attendee: {
+        name: params.attendeeName,
+        email: params.attendeeEmail,
+        timeZone: "Europe/Madrid",
+        language: "es",
+      },
+      title: `Bloqueo agenda: ${params.reason}`,
+      bookingFieldsResponses: {
+        notes: params.reason,
+      },
+      metadata: {
+        source: "dashboard_busy_block",
+        block_group_id: params.blockGroupId,
+        reason: params.reason,
+        slot_index: params.slotIndex,
+      },
+    }),
+    cache: "no-store",
+  });
+
+  const text = await response.text();
+  let payload: any = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = text || null;
+  }
+
+  if (!response.ok) {
+    return {
+      ok: false as const,
+      status: response.status,
+      error: payload,
+    };
+  }
+
+  const bookingUid =
+    payload?.data?.uid ||
+    payload?.uid ||
+    payload?.booking?.uid ||
+    payload?.data?.booking?.uid ||
+    null;
+
+  return {
+    ok: true as const,
+    bookingUid,
+    raw: payload,
+  };
 }
 
 export async function POST(request: Request) {
@@ -96,6 +196,91 @@ export async function POST(request: Request) {
     requested_by_user_id: user.id,
     requested_at: new Date().toISOString(),
   };
+
+  if (entryType === "busy_block") {
+    const cal = getCalConfig();
+    if (!cal.apiKey || !Number.isFinite(cal.eventTypeId) || cal.eventTypeId <= 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Faltan variables de Cal.com para bloqueo directo (CAL_API_KEY y CAL_BUSY_BLOCK_EVENT_TYPE_ID).",
+        },
+        { status: 500 }
+      );
+    }
+
+    const slots = splitInThirtyMinuteSlots(slot.startAt, slot.endAt);
+    if (!slots.length) {
+      return NextResponse.json(
+        { error: `No hay slots validos de ${SLOT_MINUTES} minutos para bloquear.` },
+        { status: 400 }
+      );
+    }
+
+    const blockGroupId = `bb_${profile.clinic_id}_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const bookingUids: string[] = [];
+
+    for (let i = 0; i < slots.length; i += 1) {
+      const slotItem = slots[i];
+      const slotResult = await createCalBookingSlot({
+        apiBaseUrl: cal.apiBaseUrl,
+        apiKey: cal.apiKey,
+        apiVersion: cal.apiVersion,
+        eventTypeId: cal.eventTypeId,
+        startIso: slotItem.start,
+        reason: safeTitle,
+        blockGroupId,
+        attendeeName: cal.attendeeName,
+        attendeeEmail: cal.attendeeEmail,
+        slotIndex: i,
+      });
+
+      if (!slotResult.ok) {
+        return NextResponse.json(
+          {
+            error: "No se pudo crear el bloqueo completo en Cal.com.",
+            failed_slot_index: i,
+            created_booking_uids: bookingUids,
+            cal_error: slotResult.error,
+          },
+          { status: 502 }
+        );
+      }
+
+      if (slotResult.bookingUid) {
+        bookingUids.push(slotResult.bookingUid);
+      }
+    }
+
+    const { error: busyBlockError } = await supabase.from("busy_blocks").insert({
+      clinic_id: profile.clinic_id,
+      start_at: slot.startAt,
+      end_at: slot.endAt,
+      reason: safeTitle,
+      cal_block_group_id: blockGroupId,
+      cal_booking_uids: bookingUids,
+      created_by_user_id: user.id,
+    });
+
+    if (busyBlockError) {
+      return NextResponse.json(
+        {
+          error: "Se bloquearon franjas en Cal.com, pero no se pudo guardar el bloque en Supabase.",
+          details: busyBlockError.message,
+          created_booking_uids: bookingUids,
+        },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      direct_cal: true,
+      slots_created: slots.length,
+      cal_booking_uids: bookingUids,
+      cal_block_group_id: blockGroupId,
+    });
+  }
 
   const webhookUrl = getWebhookUrl();
 

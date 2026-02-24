@@ -131,11 +131,14 @@ create table if not exists busy_blocks (
   start_at timestamptz not null,
   end_at timestamptz not null,
   reason text,
+  cal_block_group_id text,
+  cal_booking_uids jsonb,
   created_at timestamptz default now(),
   created_by_user_id uuid references auth.users(id) on delete set null
 );
 
 create index if not exists busy_blocks_start_at_idx on busy_blocks (start_at);
+create index if not exists busy_blocks_cal_block_group_idx on busy_blocks (clinic_id, cal_block_group_id);
 
 create table if not exists calendar_connections (
   id uuid primary key default gen_random_uuid(),
@@ -213,6 +216,9 @@ alter table if exists leads
   add column if not exists whatsapp_blocked_reason text,
   add column if not exists whatsapp_blocked_at timestamptz,
   add column if not exists whatsapp_blocked_by_user_id uuid references auth.users(id) on delete set null;
+alter table if exists busy_blocks
+  add column if not exists cal_block_group_id text,
+  add column if not exists cal_booking_uids jsonb;
 
 update appointments a
 set lead_name = coalesce(a.lead_name, l.full_name),
