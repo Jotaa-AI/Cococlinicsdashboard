@@ -8,13 +8,13 @@ import interactionPlugin from "@fullcalendar/interaction";
 import esLocale from "@fullcalendar/core/locales/es";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
-import type { Appointment } from "@/lib/types";
+import type { Appointment, BusyBlock } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
+import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 
 interface CalendarEventItem {
   id: string;
@@ -24,14 +24,15 @@ interface CalendarEventItem {
   backgroundColor: string;
   borderColor: string;
   textColor: string;
+  editable?: boolean;
   extendedProps: {
-    type: "appointment";
+    type: "appointment" | "busy_block";
     entityId: string;
   };
 }
 
 interface EditorState {
-  type: "appointment";
+  type: "appointment" | "busy_block";
   entityId: string;
   title: string;
   startAt: string;
@@ -73,7 +74,7 @@ export function CalendarView() {
   const [editorError, setEditorError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const buildEvents = useCallback((appointments: Appointment[]) => {
+  const buildEvents = useCallback((appointments: Appointment[], blocks: BusyBlock[]) => {
     const appts = appointments.map((item) => ({
       id: `appointment-${item.id}`,
       title: item.title || "Cita agendada",
@@ -85,21 +86,44 @@ export function CalendarView() {
       extendedProps: { type: "appointment" as const, entityId: item.id },
     }));
 
-    setEvents(appts);
+    const busy = blocks.map((item) => ({
+      id: `busy_block-${item.id}`,
+      title: `No disponible · ${item.reason || "Bloqueado"}`,
+      start: item.start_at,
+      end: item.end_at,
+      backgroundColor: "#ef4444",
+      borderColor: "#ef4444",
+      textColor: "#fff",
+      editable: false,
+      extendedProps: { type: "busy_block" as const, entityId: item.id },
+    }));
+
+    setEvents([...appts, ...busy]);
   }, []);
 
   const loadEvents = useCallback(async () => {
     if (!clinicId || !range) return;
 
-    const { data } = await supabase
-      .from("appointments")
-      .select("*")
-      .eq("clinic_id", clinicId)
-      .lt("start_at", range.end)
-      .gt("end_at", range.start)
-      .neq("status", "canceled");
+    const [appointmentsResponse, busyResponse] = await Promise.all([
+      supabase
+        .from("appointments")
+        .select("*")
+        .eq("clinic_id", clinicId)
+        .lt("start_at", range.end)
+        .gt("end_at", range.start)
+        .neq("status", "canceled"),
+      supabase
+        .from("busy_blocks")
+        .select("*")
+        .eq("clinic_id", clinicId)
+        .lt("start_at", range.end)
+        .gt("end_at", range.start),
+    ]);
 
-    buildEvents((data || []) as Appointment[]);
+    buildEvents(
+      (appointmentsResponse.data || []) as Appointment[],
+      (busyResponse.data || []) as BusyBlock[]
+    );
   }, [supabase, clinicId, range, buildEvents]);
 
   useEffect(() => {
@@ -116,6 +140,11 @@ export function CalendarView() {
         { event: "*", schema: "public", table: "appointments", filter: `clinic_id=eq.${clinicId}` },
         loadEvents
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "busy_blocks", filter: `clinic_id=eq.${clinicId}` },
+        loadEvents
+      )
       .subscribe();
 
     return () => {
@@ -123,9 +152,26 @@ export function CalendarView() {
     };
   }, [supabase, clinicId, loadEvents]);
 
+  const hasBusyOverlap = useCallback(
+    (startIso: string, endIso: string, excludedEntityId?: string) => {
+      const startMs = new Date(startIso).getTime();
+      const endMs = new Date(endIso).getTime();
+      if (Number.isNaN(startMs) || Number.isNaN(endMs)) return false;
+
+      return events.some((event) => {
+        if (event.extendedProps.type !== "busy_block") return false;
+        if (excludedEntityId && event.extendedProps.entityId === excludedEntityId) return false;
+        const eventStart = new Date(event.start).getTime();
+        const eventEnd = new Date(event.end).getTime();
+        return startMs < eventEnd && endMs > eventStart;
+      });
+    },
+    [events]
+  );
+
   const handleEventDrop = async (eventInfo: any) => {
     const event = eventInfo.event;
-    const type = event.extendedProps.type;
+    const type = event.extendedProps.type as "appointment" | "busy_block";
     const entityId = event.extendedProps.entityId;
     const startAt = event.start ? event.start.toISOString() : null;
     const endAt = event.end ? event.end.toISOString() : startAt;
@@ -137,6 +183,12 @@ export function CalendarView() {
     if (!slot.ok) {
       eventInfo.revert();
       window.alert(slot.error);
+      return;
+    }
+
+    if (type === "appointment" && hasBusyOverlap(slot.startAt, slot.endAt)) {
+      eventInfo.revert();
+      window.alert("Ese horario está bloqueado como no disponible.");
       return;
     }
 
@@ -160,7 +212,7 @@ export function CalendarView() {
   };
 
   const handleEventClick = async (info: any) => {
-    const type = info.event.extendedProps.type as "appointment";
+    const type = info.event.extendedProps.type as "appointment" | "busy_block";
     const entityId = info.event.extendedProps.entityId as string;
     setEditorError(null);
 
@@ -183,6 +235,25 @@ export function CalendarView() {
       });
       return;
     }
+
+    if (type === "busy_block") {
+      const { data } = await supabase
+        .from("busy_blocks")
+        .select("id, reason, start_at, end_at")
+        .eq("id", entityId)
+        .single();
+
+      if (!data) return;
+
+      setEditor({
+        type,
+        entityId,
+        title: data.reason || "No disponible",
+        startAt: toLocalDateTimeInputValue(data.start_at),
+        endAt: toLocalDateTimeInputValue(data.end_at),
+        notes: data.reason || "",
+      });
+    }
   };
 
   const handleSaveEditor = async () => {
@@ -196,9 +267,16 @@ export function CalendarView() {
       return;
     }
 
-    const slot = validateSlotRange({ startAt, endAt });
+    const slot = editor.type === "busy_block"
+      ? validateBusyBlockRange({ startAt, endAt })
+      : validateSlotRange({ startAt, endAt });
     if (!slot.ok) {
       setEditorError(slot.error);
+      return;
+    }
+
+    if (editor.type === "appointment" && hasBusyOverlap(slot.startAt, slot.endAt)) {
+      setEditorError("Ese horario está bloqueado como no disponible.");
       return;
     }
 
@@ -222,6 +300,20 @@ export function CalendarView() {
         if (!response.ok) {
           const payload = await response.json().catch(() => ({}));
           setEditorError(payload.error || "No se pudo actualizar la cita.");
+          return;
+        }
+      } else {
+        const { error } = await supabase
+          .from("busy_blocks")
+          .update({
+            reason: editor.title || editor.notes || "No disponible",
+            start_at: slot.startAt,
+            end_at: slot.endAt,
+          })
+          .eq("id", editor.entityId);
+
+        if (error) {
+          setEditorError(error.message || "No se pudo actualizar el bloqueo.");
           return;
         }
       }
@@ -276,7 +368,7 @@ export function CalendarView() {
             <div className="md:col-span-2 flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Detalle de evento</p>
-                <p className="text-sm font-medium">Cita</p>
+                <p className="text-sm font-medium">{editor.type === "appointment" ? "Cita" : "Bloqueo"}</p>
               </div>
               <Button type="button" variant="ghost" onClick={() => setEditor(null)}>
                 Cerrar
@@ -323,7 +415,8 @@ export function CalendarView() {
                 type="datetime-local"
                 value={editor.endAt}
                 step={1800}
-                disabled
+                onChange={(event) => setEditor((prev) => (prev ? { ...prev, endAt: event.target.value } : prev))}
+                disabled={saving}
               />
             </div>
 
@@ -339,7 +432,9 @@ export function CalendarView() {
             </div>
 
             <p className="md:col-span-2 text-xs text-muted-foreground">
-              Duracion fija de {SLOT_MINUTES} minutos entre {OPEN_HOUR}:00 y {CLOSE_HOUR}:00.
+              {editor.type === "appointment"
+                ? `Duracion fija de ${SLOT_MINUTES} minutos entre ${OPEN_HOUR}:00 y ${CLOSE_HOUR}:00.`
+                : `Bloques de ${SLOT_MINUTES} minutos entre ${OPEN_HOUR}:00 y ${CLOSE_HOUR}:00.`}
             </p>
 
             {editorError ? <p className="md:col-span-2 text-sm text-rose-600">{editorError}</p> : null}

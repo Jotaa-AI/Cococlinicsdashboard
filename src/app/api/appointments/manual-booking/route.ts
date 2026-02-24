@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
-import { validateSlotRange } from "@/lib/calendar/slot-rules";
+import { validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 
 function normalizeEsPhone(rawPhone: string) {
   const trimmed = rawPhone.trim();
@@ -45,21 +45,33 @@ export async function POST(request: Request) {
   }
 
   const body = await request.json().catch(() => null);
+  const entryType = body?.entry_type === "busy_block" ? "busy_block" : "appointment";
+
+  const title = typeof body?.title === "string" ? body.title.trim() : "";
+  const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
+  const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
+  const safeTitle = title || reason;
 
   const leadName = typeof body?.lead_name === "string" ? body.lead_name.trim() : "";
   const rawPhone = typeof body?.lead_phone === "string" ? body.lead_phone : "";
   const leadPhone = normalizeEsPhone(rawPhone);
-  const title = typeof body?.title === "string" ? body.title.trim() : "";
-  const notes = typeof body?.notes === "string" ? body.notes.trim() : "";
 
-  if (!leadName || !leadPhone || !title || !body?.start_at) {
+  if (!safeTitle || !body?.start_at) {
     return NextResponse.json(
-      { error: "lead_name, lead_phone, title y start_at son obligatorios." },
+      { error: "title/reason y start_at son obligatorios." },
       { status: 400 }
     );
   }
 
-  const slot = validateSlotRange({
+  if (entryType === "appointment" && (!leadName || !leadPhone)) {
+    return NextResponse.json(
+      { error: "lead_name y lead_phone son obligatorios para crear cita." },
+      { status: 400 }
+    );
+  }
+
+  const slotValidator = entryType === "busy_block" ? validateBusyBlockRange : validateSlotRange;
+  const slot = slotValidator({
     startAt: String(body.start_at),
     endAt: body.end_at ? String(body.end_at) : null,
   });
@@ -69,16 +81,18 @@ export async function POST(request: Request) {
   }
 
   const payload = {
+    entry_type: entryType,
     clinic_id: profile.clinic_id,
-    lead_name: leadName,
-    lead_phone: leadPhone,
-    title,
-    notes: notes || title,
+    lead_name: entryType === "appointment" ? leadName : null,
+    lead_phone: entryType === "appointment" ? leadPhone : null,
+    title: safeTitle,
+    reason: entryType === "busy_block" ? safeTitle : null,
+    notes: notes || safeTitle,
     start_at: slot.startAt,
     end_at: slot.endAt,
     created_by: "staff",
     source_channel: "staff",
-    source: "agenda_manual",
+    source: entryType === "busy_block" ? "agenda_block_manual" : "agenda_manual",
     requested_by_user_id: user.id,
     requested_at: new Date().toISOString(),
   };

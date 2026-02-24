@@ -125,3 +125,53 @@ export function validateSlotRange(input: SlotValidationInput): SlotValidationRes
 
   return { ok: true, startAt: startDate.toISOString(), endAt: endDate.toISOString() };
 }
+
+export function validateBusyBlockRange(input: SlotValidationInput): SlotValidationResult {
+  const timeZone = input.timeZone || DEFAULT_CLINIC_TIMEZONE;
+  const startDate = new Date(input.startAt);
+  const endDate = input.endAt ? new Date(input.endAt) : addMinutes(startDate, SLOT_MINUTES);
+
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+    return { ok: false, error: "Fecha u hora invalida." };
+  }
+
+  if (startDate.getSeconds() !== 0 || startDate.getMilliseconds() !== 0) {
+    return { ok: false, error: "El bloqueo debe empezar en punto o y media." };
+  }
+
+  if (endDate.getSeconds() !== 0 || endDate.getMilliseconds() !== 0) {
+    return { ok: false, error: "El bloqueo debe terminar en punto o y media." };
+  }
+
+  const diffMinutes = Math.round((endDate.getTime() - startDate.getTime()) / 60000);
+  if (diffMinutes < SLOT_MINUTES) {
+    return { ok: false, error: `El bloqueo debe durar al menos ${SLOT_MINUTES} minutos.` };
+  }
+
+  if (diffMinutes % SLOT_MINUTES !== 0) {
+    return { ok: false, error: `El bloqueo debe ir en tramos de ${SLOT_MINUTES} minutos.` };
+  }
+
+  const localStart = getZonedParts(startDate, timeZone);
+  const localEnd = getZonedParts(endDate, timeZone);
+  const weekday = getIsoWeekday(startDate, timeZone);
+
+  if (!sameLocalDay(localStart, localEnd)) {
+    return { ok: false, error: "El bloqueo no puede cruzar al dia siguiente." };
+  }
+
+  if (!WEEKDAYS_ALLOWED.includes(weekday as (typeof WEEKDAYS_ALLOWED)[number])) {
+    return { ok: false, error: "Solo se puede bloquear de lunes a viernes." };
+  }
+
+  const startTotal = localStart.hour * 60 + localStart.minute;
+  const endTotal = localEnd.hour * 60 + localEnd.minute;
+  const minTotal = OPEN_HOUR * 60;
+  const maxTotal = CLOSE_HOUR * 60;
+
+  if (startTotal < minTotal || endTotal > maxTotal) {
+    return { ok: false, error: "Solo se puede bloquear entre 09:00 y 19:00." };
+  }
+
+  return { ok: true, startAt: startDate.toISOString(), endAt: endDate.toISOString() };
+}

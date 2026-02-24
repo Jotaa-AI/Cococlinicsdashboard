@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
+import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateBusyBlockRange } from "@/lib/calendar/slot-rules";
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
@@ -35,25 +35,22 @@ function addMinutesToTime(value: string, minutes: number) {
   return toTimeInputValue(date);
 }
 
-export function NewAppointmentButton() {
+export function NewBusyBlockButton() {
   const now = useMemo(() => new Date(), []);
   const defaultStart = useMemo(() => nextHour(now), [now]);
 
   const [open, setOpen] = useState(false);
-  const [patientName, setPatientName] = useState("");
-  const [patientPhone, setPatientPhone] = useState("+34");
   const [date, setDate] = useState(toDateInputValue(defaultStart));
   const [startTime, setStartTime] = useState(toTimeInputValue(defaultStart));
+  const [endTime, setEndTime] = useState(addMinutesToTime(toTimeInputValue(defaultStart), SLOT_MINUTES));
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const endTime = useMemo(() => addMinutesToTime(startTime, SLOT_MINUTES), [startTime]);
 
   const resetForm = () => {
-    setPatientName("");
-    setPatientPhone("+34");
     setDate(toDateInputValue(defaultStart));
     setStartTime(toTimeInputValue(defaultStart));
+    setEndTime(addMinutesToTime(toTimeInputValue(defaultStart), SLOT_MINUTES));
     setReason("");
     setError(null);
   };
@@ -68,29 +65,19 @@ export function NewAppointmentButton() {
     setError(null);
 
     if (!reason.trim()) {
-      setError("El motivo es obligatorio.");
-      return;
-    }
-
-    if (!patientName.trim()) {
-      setError("El nombre es obligatorio.");
-      return;
-    }
-
-    if (!/^\+34\d{9}$/.test(patientPhone)) {
-      setError("El teléfono debe tener formato +34XXXXXXXXX.");
+      setError("El motivo del bloqueo es obligatorio.");
       return;
     }
 
     const startAt = new Date(`${date}T${startTime}:00`);
-    if (Number.isNaN(startAt.getTime())) {
+    const endAt = new Date(`${date}T${endTime}:00`);
+
+    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
       setError("Fecha u hora invalida.");
       return;
     }
 
-    const endAt = new Date(startAt.getTime() + SLOT_MINUTES * 60 * 1000);
-
-    const slot = validateSlotRange({
+    const slot = validateBusyBlockRange({
       startAt: startAt.toISOString(),
       endAt: endAt.toISOString(),
     });
@@ -106,11 +93,10 @@ export function NewAppointmentButton() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          entry_type: "appointment",
+          entry_type: "busy_block",
           title: reason.trim(),
+          reason: reason.trim(),
           notes: reason.trim(),
-          lead_name: patientName.trim(),
-          lead_phone: patientPhone,
           start_at: slot.startAt,
           end_at: slot.endAt,
           created_by: "staff",
@@ -119,13 +105,13 @@ export function NewAppointmentButton() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        setError(payload?.error || "No se pudo enviar la cita a n8n.");
+        setError(payload?.error || "No se pudo enviar el bloqueo a n8n.");
         return;
       }
 
       handleClose();
     } catch {
-      setError("No se pudo crear la cita.");
+      setError("No se pudo crear el bloqueo.");
     } finally {
       setLoading(false);
     }
@@ -134,109 +120,74 @@ export function NewAppointmentButton() {
   return (
     <div className="w-full">
       <div className="flex justify-end">
-        <Button onClick={() => setOpen((prev) => !prev)} variant="default">
-          {open ? "Cerrar" : "Nueva cita"}
+        <Button onClick={() => setOpen((prev) => !prev)} variant="outline">
+          {open ? "Cerrar bloqueo" : "Bloquear hueco"}
         </Button>
       </div>
 
       {open ? (
-        <form onSubmit={handleSubmit} className="mt-4 grid gap-4 rounded-lg border border-border bg-white p-4 md:grid-cols-6">
-          <div className="space-y-1.5 md:col-span-2">
-            <Label htmlFor="appointment-patient-name">Nombre</Label>
-            <Input
-              id="appointment-patient-name"
-              type="text"
-              placeholder="Nombre del lead"
-              value={patientName}
-              onChange={(event) => setPatientName(event.target.value)}
-              required
-            />
+        <form onSubmit={handleSubmit} className="mt-4 grid gap-4 rounded-lg border border-border bg-white p-4 md:grid-cols-5">
+          <div className="space-y-1.5">
+            <Label htmlFor="block-date">Día</Label>
+            <Input id="block-date" type="date" value={date} onChange={(event) => setDate(event.target.value)} required />
           </div>
 
-          <div className="space-y-1.5 md:col-span-2">
-            <Label htmlFor="appointment-patient-phone">Teléfono</Label>
+          <div className="space-y-1.5">
+            <Label htmlFor="block-start">Hora inicio</Label>
             <Input
-              id="appointment-patient-phone"
-              type="tel"
-              placeholder="+34600111222"
-              value={patientPhone}
+              id="block-start"
+              type="time"
+              min={`${String(OPEN_HOUR).padStart(2, "0")}:00`}
+              max={`${String(CLOSE_HOUR - 1).padStart(2, "0")}:30`}
+              step={1800}
+              value={startTime}
               onChange={(event) => {
-                const digits = event.target.value.replace(/\D/g, "");
-                if (!digits) {
-                  setPatientPhone("+34");
-                  return;
+                setStartTime(event.target.value);
+                if (event.target.value >= endTime) {
+                  setEndTime(addMinutesToTime(event.target.value, SLOT_MINUTES));
                 }
-
-                if (digits.startsWith("34")) {
-                  setPatientPhone(`+${digits.slice(0, 11)}`);
-                  return;
-                }
-
-                setPatientPhone(`+34${digits.slice(0, 9)}`);
               }}
               required
             />
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="appointment-date">Día</Label>
+            <Label htmlFor="block-end">Hora fin</Label>
             <Input
-              id="appointment-date"
-              type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="appointment-start">Hora inicio</Label>
-            <Input
-              id="appointment-start"
+              id="block-end"
               type="time"
-              min={`${String(OPEN_HOUR).padStart(2, "0")}:00`}
-              max={`${String(CLOSE_HOUR - 1).padStart(2, "0")}:30`}
+              min={`${String(OPEN_HOUR).padStart(2, "0")}:30`}
+              max={`${String(CLOSE_HOUR).padStart(2, "0")}:00`}
               step={1800}
-              value={startTime}
-              onChange={(event) => setStartTime(event.target.value)}
-              required
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="appointment-end">Hora fin</Label>
-            <Input
-              id="appointment-end"
-              type="time"
               value={endTime}
-              step={1800}
-              disabled
+              onChange={(event) => setEndTime(event.target.value)}
+              required
             />
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="appointment-reason">Motivo</Label>
+          <div className="space-y-1.5 md:col-span-2">
+            <Label htmlFor="block-reason">Motivo</Label>
             <Input
-              id="appointment-reason"
+              id="block-reason"
               type="text"
-              placeholder="Ej. Revisión facial"
+              placeholder="Ej. Médico, descanso, reunión..."
               value={reason}
               onChange={(event) => setReason(event.target.value)}
               required
             />
           </div>
 
-          {error ? <p className="md:col-span-6 text-sm text-rose-600">{error}</p> : null}
-          <p className="md:col-span-6 text-xs text-muted-foreground">
-            Solo bloques de {SLOT_MINUTES} minutos entre {OPEN_HOUR}:00 y {CLOSE_HOUR}:00.
+          {error ? <p className="md:col-span-5 text-sm text-rose-600">{error}</p> : null}
+          <p className="md:col-span-5 text-xs text-muted-foreground">
+            Solo tramos de {SLOT_MINUTES} minutos entre {OPEN_HOUR}:00 y {CLOSE_HOUR}:00 (lunes a viernes).
           </p>
 
-          <div className="md:col-span-6 flex justify-end gap-2">
+          <div className="md:col-span-5 flex justify-end gap-2">
             <Button type="button" variant="outline" onClick={handleClose} disabled={loading}>
               Cancelar
             </Button>
             <Button type="submit" disabled={loading}>
-              {loading ? "Guardando..." : "Crear cita"}
+              {loading ? "Guardando..." : "Guardar bloqueo"}
             </Button>
           </div>
         </form>
