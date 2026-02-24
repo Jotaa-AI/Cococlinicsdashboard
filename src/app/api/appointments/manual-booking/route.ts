@@ -80,7 +80,6 @@ async function createCalBookingSlot(params: {
         timeZone: "Europe/Madrid",
         language: "es",
       },
-      title: `Bloqueo agenda: ${params.reason}`,
       bookingFieldsResponses: {
         notes: params.reason,
       },
