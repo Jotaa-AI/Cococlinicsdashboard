@@ -32,7 +32,7 @@ function getCalConfig() {
     eventTypeId: Number(process.env.CAL_BUSY_BLOCK_EVENT_TYPE_ID || 0),
     attendeeName: process.env.CAL_BLOCKING_ATTENDEE_NAME || "Bloqueo interno",
     attendeeEmail:
-      process.env.CAL_BLOCKING_ATTENDEE_EMAIL || "bloqueos-coco-clinics@invalid.local",
+      process.env.CAL_BLOCKING_ATTENDEE_EMAIL || "bloqueos-coco-clinics@example.com",
   };
 }
 
