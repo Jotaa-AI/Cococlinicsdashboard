@@ -18,6 +18,7 @@ interface KpiValues {
   appointments: number;
   noResponse: number;
   callCostTotal: number;
+  clientsClosedMonth: number;
 }
 
 const currencyPreciseFormatter = new Intl.NumberFormat("es-ES", {
@@ -39,6 +40,7 @@ export function KpiGrid() {
     appointments: 0,
     noResponse: 0,
     callCostTotal: 0,
+    clientsClosedMonth: 0,
   });
 
   const clinicId = profile?.clinic_id;
@@ -77,6 +79,7 @@ export function KpiGrid() {
       noResponse,
       appointments,
       endedCallsInMonth,
+      closedLeads,
     ] =
       await Promise.all([
       supabase
@@ -120,6 +123,11 @@ export function KpiGrid() {
         .gte("ended_at", monthRange.startIso)
         .lt("ended_at", monthRange.endIso)
         .order("ended_at", { ascending: false }),
+      supabase
+        .from("leads")
+        .select("id, converted_to_client, converted_at, stage_key, updated_at")
+        .eq("clinic_id", clinicId)
+        .or("converted_to_client.eq.true,stage_key.eq.client_closed"),
     ]);
 
     const parseNumeric = (value: unknown): number | null => {
@@ -140,6 +148,18 @@ export function KpiGrid() {
 
     const leads30 = leads30d.count || 0;
     const contactedRate = leads30 ? Math.round(((contacted.count || 0) / leads30) * 100) : 0;
+    const clientsClosedMonth = (closedLeads.data || []).filter((lead) => {
+      const referenceDate =
+        lead.converted_to_client && lead.converted_at
+          ? lead.converted_at
+          : lead.stage_key === "client_closed"
+            ? lead.updated_at
+            : null;
+
+      if (!referenceDate) return false;
+      const timestamp = new Date(referenceDate).getTime();
+      return timestamp >= new Date(monthRange.startIso).getTime() && timestamp < new Date(monthRange.endIso).getTime();
+    }).length;
 
     setKpis({
       leadsToday: leadsToday.count || 0,
@@ -149,6 +169,7 @@ export function KpiGrid() {
       appointments: appointments.count || 0,
       noResponse: noResponse.count || 0,
       callCostTotal: Number(totalCallCost.toFixed(2)),
+      clientsClosedMonth,
     });
   }, [supabase, clinicId, callCostPerMin, monthRange.startIso, monthRange.endIso]);
 
@@ -216,6 +237,11 @@ export function KpiGrid() {
     {
       label: "Coste total llamadas",
       value: currencyPreciseFormatter.format(kpis.callCostTotal),
+      note: monthLabel,
+    },
+    {
+      label: "Clientes cerrados",
+      value: kpis.clientsClosedMonth,
       note: monthLabel,
     },
   ];

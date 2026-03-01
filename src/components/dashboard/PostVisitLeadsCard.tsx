@@ -85,10 +85,12 @@ export function PostVisitLeadsCard() {
       leadMap = new Map(((leadsData || []) as Lead[]).map((lead) => [lead.id, lead]));
     }
 
-    const nextRows = dedupedAppointments.map((appointment) => ({
-      appointment,
-      lead: appointment.lead_id ? leadMap.get(appointment.lead_id) || null : null,
-    }));
+    const nextRows = dedupedAppointments
+      .map((appointment) => ({
+        appointment,
+        lead: appointment.lead_id ? leadMap.get(appointment.lead_id) || null : null,
+      }))
+      .filter((row) => row.lead && row.lead.stage_key !== "client_closed" && !row.lead.converted_to_client) as PostVisitLeadRow[];
 
     setRows(nextRows);
 
@@ -145,7 +147,7 @@ export function PostVisitLeadsCard() {
   }, [supabase, clinicId, loadRows]);
 
   const summaryLabel = useMemo(() => {
-    if (!rows.length) return "Sin visitas registradas";
+    if (!rows.length) return "Sin primeras visitas pendientes";
     if (rows.length === 1) return "1 primera visita pendiente de gestión";
     return `${rows.length} primeras visitas pendientes de gestión`;
   }, [rows.length]);
@@ -317,7 +319,7 @@ export function PostVisitLeadsCard() {
               })}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">No hay primeras visitas registradas hasta hoy.</p>
+            <p className="text-sm text-muted-foreground">No hay primeras visitas pendientes de cierre hasta hoy.</p>
           )}
         </CardContent>
       </Card>
