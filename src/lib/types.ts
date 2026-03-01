@@ -8,6 +8,10 @@ export interface Lead {
   treatment: string | null;
   source: string | null;
   status: string;
+  converted_to_client: boolean;
+  converted_value_eur: number | string | null;
+  converted_at: string | null;
+  post_visit_outcome_reason: string | null;
   contacto_futuro: string | null;
   whatsapp_blocked: boolean;
   whatsapp_blocked_reason: string | null;
@@ -52,6 +56,9 @@ export interface Appointment {
   start_at: string;
   end_at: string;
   status: "scheduled" | "canceled" | "done";
+  reminder_2d_status: "no_enviado" | "enviado";
+  reminder_1d_status: "no_enviado" | "enviado";
+  reminder_1h_status: "no_enviado" | "enviado";
   notes: string | null;
   gcal_event_id: string | null;
   source_channel: "call_ai" | "whatsapp_ai" | "staff";

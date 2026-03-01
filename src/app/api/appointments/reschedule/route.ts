@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: availability.error }, { status: 409 });
   }
 
-  const updatePayload: Record<string, string | null> = {
+  const updatePayload: Record<string, string | number | boolean | null> = {
     start_at: slot.startAt,
     end_at: slot.endAt,
   };

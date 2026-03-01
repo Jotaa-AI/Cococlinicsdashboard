@@ -219,7 +219,7 @@ export function CalendarView() {
     if (type === "appointment") {
       const { data } = await supabase
         .from("appointments")
-        .select("id, title, start_at, end_at, notes")
+        .select("*")
         .eq("id", entityId)
         .single();
 

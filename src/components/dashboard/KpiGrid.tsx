@@ -18,17 +18,7 @@ interface KpiValues {
   appointments: number;
   noResponse: number;
   callCostTotal: number;
-  scheduledAppointmentsInMonth: number;
-  scheduledAppointmentsRevenueInMonth: number;
-  avgTreatmentPrice: number;
 }
-
-const currencyRoundedFormatter = new Intl.NumberFormat("es-ES", {
-  style: "currency",
-  currency: "EUR",
-  minimumFractionDigits: 2,
-  maximumFractionDigits: 2,
-});
 
 const currencyPreciseFormatter = new Intl.NumberFormat("es-ES", {
   style: "currency",
@@ -49,9 +39,6 @@ export function KpiGrid() {
     appointments: 0,
     noResponse: 0,
     callCostTotal: 0,
-    scheduledAppointmentsInMonth: 0,
-    scheduledAppointmentsRevenueInMonth: 0,
-    avgTreatmentPrice: 399,
   });
 
   const clinicId = profile?.clinic_id;
@@ -89,8 +76,6 @@ export function KpiGrid() {
       contacted,
       noResponse,
       appointments,
-      appointmentsInMonth,
-      clinic,
       endedCallsInMonth,
     ] =
       await Promise.all([
@@ -128,14 +113,6 @@ export function KpiGrid() {
         .eq("status", "scheduled")
         .gte("start_at", new Date().toISOString()),
       supabase
-        .from("appointments")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .neq("status", "canceled")
-        .gte("start_at", monthRange.startIso)
-        .lt("start_at", monthRange.endIso),
-      supabase.from("clinics").select("avg_treatment_price_eur").eq("id", clinicId).maybeSingle(),
-      supabase
         .from("calls")
         .select("duration_sec, call_cost_eur")
         .eq("clinic_id", clinicId)
@@ -161,9 +138,6 @@ export function KpiGrid() {
       return acc + ((row.duration_sec || 0) / 60) * callCostPerMin;
     }, 0);
 
-    const avgTreatmentPrice = parseNumeric(clinic.data?.avg_treatment_price_eur) ?? 399;
-    const scheduledAppointmentsInMonth = appointmentsInMonth.count || 0;
-
     const leads30 = leads30d.count || 0;
     const contactedRate = leads30 ? Math.round(((contacted.count || 0) / leads30) * 100) : 0;
 
@@ -175,9 +149,6 @@ export function KpiGrid() {
       appointments: appointments.count || 0,
       noResponse: noResponse.count || 0,
       callCostTotal: Number(totalCallCost.toFixed(2)),
-      scheduledAppointmentsInMonth,
-      scheduledAppointmentsRevenueInMonth: Number((scheduledAppointmentsInMonth * avgTreatmentPrice).toFixed(2)),
-      avgTreatmentPrice: Number(avgTreatmentPrice.toFixed(2)),
     });
   }, [supabase, clinicId, callCostPerMin, monthRange.startIso, monthRange.endIso]);
 
@@ -246,11 +217,6 @@ export function KpiGrid() {
       label: "Coste total llamadas",
       value: currencyPreciseFormatter.format(kpis.callCostTotal),
       note: monthLabel,
-    },
-    {
-      label: "Valor llamadas exitosas",
-      value: currencyRoundedFormatter.format(kpis.scheduledAppointmentsRevenueInMonth),
-      note: `${kpis.scheduledAppointmentsInMonth} citas x ${currencyRoundedFormatter.format(kpis.avgTreatmentPrice)} · ${monthLabel}`,
     },
   ];
 

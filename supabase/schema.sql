@@ -40,6 +40,13 @@ EXCEPTION
   WHEN duplicate_object THEN NULL;
 END $$;
 
+DO $$
+BEGIN
+  CREATE TYPE reminder_delivery_status AS ENUM ('no_enviado', 'enviado');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
 -- Core tables
 create table if not exists clinics (
   id uuid primary key default gen_random_uuid(),
@@ -64,6 +71,10 @@ create table if not exists leads (
   treatment text,
   source text default 'meta',
   status lead_status not null default 'new',
+  converted_to_client boolean not null default false,
+  converted_value_eur numeric(10,2),
+  converted_at timestamptz,
+  post_visit_outcome_reason text,
   contacto_futuro timestamptz,
   whatsapp_blocked boolean not null default false,
   whatsapp_blocked_reason text,
@@ -77,6 +88,7 @@ create unique index if not exists leads_phone_unique on leads (clinic_id, phone)
 create index if not exists leads_phone_idx on leads (phone);
 create index if not exists leads_created_at_idx on leads (created_at);
 create index if not exists leads_status_idx on leads (status);
+create index if not exists leads_converted_at_idx on leads (clinic_id, converted_at) where converted_to_client = true;
 create index if not exists leads_contacto_futuro_idx on leads (clinic_id, contacto_futuro) where contacto_futuro is not null;
 create index if not exists leads_whatsapp_blocked_idx on leads (clinic_id, whatsapp_blocked);
 
@@ -114,6 +126,9 @@ create table if not exists appointments (
   start_at timestamptz not null,
   end_at timestamptz not null,
   status appointment_status not null default 'scheduled',
+  reminder_2d_status reminder_delivery_status not null default 'no_enviado',
+  reminder_1d_status reminder_delivery_status not null default 'no_enviado',
+  reminder_1h_status reminder_delivery_status not null default 'no_enviado',
   notes text,
   gcal_event_id text,
   created_by text not null default 'staff',
@@ -209,6 +224,33 @@ end $$;
 alter table if exists appointments
   add column if not exists lead_name text,
   add column if not exists lead_phone text;
+
+alter table if exists appointments
+  add column if not exists reminder_2d_status reminder_delivery_status not null default 'no_enviado',
+  add column if not exists reminder_1d_status reminder_delivery_status not null default 'no_enviado',
+  add column if not exists reminder_1h_status reminder_delivery_status not null default 'no_enviado';
+
+alter table if exists leads
+  add column if not exists converted_to_client boolean not null default false,
+  add column if not exists converted_value_eur numeric(10,2),
+  add column if not exists converted_at timestamptz,
+  add column if not exists post_visit_outcome_reason text;
+
+update leads
+set
+  converted_to_client = coalesce(converted_to_client, false)
+where
+  converted_to_client is null;
+
+update appointments
+set
+  reminder_2d_status = coalesce(reminder_2d_status, 'no_enviado'::reminder_delivery_status),
+  reminder_1d_status = coalesce(reminder_1d_status, 'no_enviado'::reminder_delivery_status),
+  reminder_1h_status = coalesce(reminder_1h_status, 'no_enviado'::reminder_delivery_status)
+where
+  reminder_2d_status is null
+  or reminder_1d_status is null
+  or reminder_1h_status is null;
 alter table if exists calendar_events add column if not exists title text;
 alter table if exists leads
   add column if not exists contacto_futuro timestamptz,
@@ -1106,8 +1148,12 @@ values
   ('whatsapp_followup_pending', 'whatsapp_ai', 'Agentes de WhatsApp', 'Seguimiento pendiente', 'Quedó pendiente respuesta del lead por WhatsApp', 2, 30, false, true),
   ('whatsapp_failed_team_review', 'whatsapp_ai', 'Agentes de WhatsApp', 'Revisión manual equipo', 'No se cerró por IA; se envía resumen al equipo', 2, 40, false, true),
   ('visit_scheduled', 'closed', 'Cerrados', 'Agendado', 'Cita confirmada en agenda', 3, 10, true, true),
-  ('not_interested', 'closed', 'Cerrados', 'No interesado', 'Lead rechazó continuar', 3, 20, true, true),
-  ('discarded', 'closed', 'Cerrados', 'Descartado', 'Lead descartado por criterio interno', 3, 30, true, true)
+  ('post_visit_pending_decision', 'closed', 'Cerrados', 'Pendiente decisión', 'Visitó la clínica y está valorando la propuesta', 3, 20, false, true),
+  ('post_visit_follow_up', 'closed', 'Cerrados', 'Seguimiento post-visita', 'Requiere seguimiento comercial tras la visita', 3, 30, false, true),
+  ('post_visit_not_closed', 'closed', 'Cerrados', 'No cerró tras visita', 'Hizo la visita pero no se cerró la venta', 3, 40, true, true),
+  ('client_closed', 'closed', 'Cerrados', 'Cliente cerrado', 'Venta cerrada y cliente convertido', 3, 50, true, true),
+  ('not_interested', 'closed', 'Cerrados', 'No interesado', 'Lead rechazó continuar', 3, 60, true, true),
+  ('discarded', 'closed', 'Cerrados', 'Descartado', 'Lead descartado por criterio interno', 3, 70, true, true)
 on conflict (stage_key) do update
 set
   pipeline_key = excluded.pipeline_key,
@@ -1282,6 +1328,10 @@ as $$
     when 'whatsapp_followup_pending' then 'whatsapp_sent'::lead_status
     when 'whatsapp_failed_team_review' then 'no_response'::lead_status
     when 'visit_scheduled' then 'visit_scheduled'::lead_status
+    when 'post_visit_pending_decision' then 'contacted'::lead_status
+    when 'post_visit_follow_up' then 'contacted'::lead_status
+    when 'post_visit_not_closed' then 'not_interested'::lead_status
+    when 'client_closed' then 'visit_scheduled'::lead_status
     when 'not_interested' then 'not_interested'::lead_status
     when 'discarded' then 'not_interested'::lead_status
     else 'call_done'::lead_status

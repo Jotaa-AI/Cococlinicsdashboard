@@ -8,10 +8,13 @@ import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import type { Lead, LeadStageCatalog, LeadStageHistory } from "@/lib/types";
 import { LEGACY_STATUS_FROM_STAGE, PIPELINE_LABELS_ES, STAGE_TONE_ES } from "@/lib/constants/lead-stage";
+import { updateLeadOutcome } from "@/lib/leads/update-lead-outcome";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
+import { CelebrationOverlay } from "@/components/ui/celebration-overlay";
 
 const LEGACY_STAGE_FROM_STATUS: Record<string, string> = {
   new: "new_lead",
@@ -151,6 +154,50 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
     description_es: "Cita confirmada",
     pipeline_order: 3,
     order_index: 10,
+    is_terminal: false,
+    is_active: true,
+  },
+  {
+    stage_key: "post_visit_pending_decision",
+    pipeline_key: "closed",
+    pipeline_label_es: "Cerrados",
+    label_es: "Pendiente decisión",
+    description_es: "Está valorando la propuesta",
+    pipeline_order: 3,
+    order_index: 20,
+    is_terminal: false,
+    is_active: true,
+  },
+  {
+    stage_key: "post_visit_follow_up",
+    pipeline_key: "closed",
+    pipeline_label_es: "Cerrados",
+    label_es: "Seguimiento post-visita",
+    description_es: "Requiere seguimiento",
+    pipeline_order: 3,
+    order_index: 30,
+    is_terminal: false,
+    is_active: true,
+  },
+  {
+    stage_key: "post_visit_not_closed",
+    pipeline_key: "closed",
+    pipeline_label_es: "Cerrados",
+    label_es: "No cerró tras visita",
+    description_es: "No se cerró la venta",
+    pipeline_order: 3,
+    order_index: 40,
+    is_terminal: true,
+    is_active: true,
+  },
+  {
+    stage_key: "client_closed",
+    pipeline_key: "closed",
+    pipeline_label_es: "Cerrados",
+    label_es: "Cliente cerrado",
+    description_es: "Venta cerrada",
+    pipeline_order: 3,
+    order_index: 50,
     is_terminal: true,
     is_active: true,
   },
@@ -161,7 +208,7 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
     label_es: "No interesado",
     description_es: "Cierre por rechazo",
     pipeline_order: 3,
-    order_index: 20,
+    order_index: 60,
     is_terminal: true,
     is_active: true,
   },
@@ -172,7 +219,7 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
     label_es: "Descartado",
     description_es: "Cierre interno",
     pipeline_order: 3,
-    order_index: 30,
+    order_index: 70,
     is_terminal: true,
     is_active: true,
   },
@@ -218,6 +265,16 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
         <div className="mt-2">
           <Badge variant="warning">WhatsApp bloqueado</Badge>
         </div>
+      ) : null}
+      {lead.stage_key === "post_visit_not_closed" && lead.post_visit_outcome_reason ? (
+        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+          Motivo: {lead.post_visit_outcome_reason}
+        </p>
+      ) : null}
+      {lead.stage_key === "client_closed" && lead.converted_value_eur !== null && lead.converted_value_eur !== undefined ? (
+        <p className="mt-2 text-xs font-medium text-emerald-700">
+          Cerrado: {Number(lead.converted_value_eur).toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
+        </p>
       ) : null}
     </button>
   );
@@ -284,6 +341,11 @@ export function PipelineBoard() {
   const [leadHistory, setLeadHistory] = useState<LeadStageHistory[]>([]);
   const [updatingLeadBlock, setUpdatingLeadBlock] = useState(false);
   const [leadBlockError, setLeadBlockError] = useState<string | null>(null);
+  const [leadConversionValue, setLeadConversionValue] = useState("");
+  const [leadOutcomeReason, setLeadOutcomeReason] = useState("");
+  const [savingLeadConversion, setSavingLeadConversion] = useState(false);
+  const [leadConversionError, setLeadConversionError] = useState<string | null>(null);
+  const [showCelebration, setShowCelebration] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -401,6 +463,23 @@ export function PipelineBoard() {
       setActiveLead(updated);
     }
   }, [leads, activeLead]);
+
+  useEffect(() => {
+    if (!activeLead) {
+      setLeadConversionValue("");
+      setLeadOutcomeReason("");
+      setLeadConversionError(null);
+      return;
+    }
+
+    setLeadConversionValue(
+      activeLead.converted_value_eur === null || activeLead.converted_value_eur === undefined
+        ? ""
+        : String(activeLead.converted_value_eur)
+    );
+    setLeadOutcomeReason(activeLead.post_visit_outcome_reason || "");
+    setLeadConversionError(null);
+  }, [activeLead]);
 
   useEffect(() => {
     if (!clinicId) return;
@@ -529,8 +608,73 @@ export function PipelineBoard() {
     setUpdatingLeadBlock(false);
   };
 
+  const updateLeadPostVisitOutcome = async (targetStage: string) => {
+    if (!clinicId || !activeLead) return;
+
+    const requiresValue = targetStage === "client_closed";
+    const trimmedValue = leadConversionValue.trim();
+    let parsedValue: number | null = null;
+
+    if (requiresValue) {
+      parsedValue = Number(trimmedValue.replace(",", "."));
+      if (!trimmedValue || Number.isNaN(parsedValue) || parsedValue < 0) {
+        setLeadConversionError("Indica un valor económico válido para marcar el lead como cliente.");
+        return;
+      }
+    } else if (!leadOutcomeReason.trim()) {
+      setLeadConversionError("Indica un motivo cuando el lead no se cierra.");
+      return;
+    }
+
+    setSavingLeadConversion(true);
+    setLeadConversionError(null);
+
+    const result = await updateLeadOutcome({
+      supabase,
+      clinicId,
+      leadId: activeLead.id,
+      toStageKey: targetStage,
+      actorType: profile?.role || "staff",
+      actorId: profile?.user_id || null,
+      source: "pipeline_board",
+      convertedValueEur: requiresValue ? parsedValue : null,
+      outcomeReason: requiresValue ? null : leadOutcomeReason.trim(),
+    });
+
+    if (!result.ok || !result.lead) {
+      setLeadConversionError(result.error || "No se pudo guardar el resultado del lead.");
+      setSavingLeadConversion(false);
+      return;
+    }
+
+    const updatedLead = result.lead;
+    setLeads((prev) => prev.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)));
+    setActiveLead(updatedLead);
+    if (requiresValue) {
+      setShowCelebration(true);
+      setTimeout(() => setShowCelebration(false), 2400);
+    }
+
+    setSavingLeadConversion(false);
+  };
+
+  const canManagePostVisitOutcome = useMemo(
+    () =>
+      activeLead
+        ? [
+            "visit_scheduled",
+            "post_visit_pending_decision",
+            "post_visit_follow_up",
+            "post_visit_not_closed",
+            "client_closed",
+          ].includes(resolveStageKey(activeLead))
+        : false,
+    [activeLead, resolveStageKey]
+  );
+
   return (
     <>
+      <CelebrationOverlay open={showCelebration} />
       <div className="mb-4 rounded-xl border border-border bg-muted/20 p-3">
         <p className="text-sm font-semibold">Pipeline por etapas dinámicas</p>
         <p className="text-xs text-muted-foreground">Vista principal de llamadas y cierre.</p>
@@ -571,6 +715,7 @@ export function PipelineBoard() {
         onOpenChange={(open) => {
           if (!open) {
             setLeadBlockError(null);
+            setLeadConversionError(null);
             setActiveLead(null);
           }
         }}
@@ -604,6 +749,82 @@ export function PipelineBoard() {
                     {activeLead.next_action_at ? toLocalDate(activeLead.next_action_at) : "Sin acción pendiente"}
                   </p>
                 </Card>
+                {canManagePostVisitOutcome ? (
+                  <Card className="space-y-3 p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs text-muted-foreground">Resultado tras la visita</p>
+                      <Badge variant={activeLead.converted_to_client ? "success" : "soft"}>
+                        {activeLead.converted_to_client ? "Cliente cerrado" : "Pendiente"}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      Tras la visita, decide aquí cómo queda el lead y, si cerró, anota el valor real del tratamiento.
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={savingLeadConversion}
+                        onClick={() => updateLeadPostVisitOutcome("post_visit_pending_decision")}
+                      >
+                        Pendiente decisión
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={savingLeadConversion}
+                        onClick={() => updateLeadPostVisitOutcome("post_visit_follow_up")}
+                      >
+                        Seguimiento
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        disabled={savingLeadConversion}
+                        onClick={() => updateLeadPostVisitOutcome("post_visit_not_closed")}
+                      >
+                        No cerró
+                      </Button>
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground">Valor real del tratamiento (EUR)</p>
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputMode="decimal"
+                        placeholder="0,00"
+                        value={leadConversionValue}
+                        onChange={(event) => setLeadConversionValue(event.target.value)}
+                        disabled={savingLeadConversion}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground">Motivo si no cierra</p>
+                      <Input
+                        type="text"
+                        placeholder="Ej. Lo quiere pensar, necesita seguimiento..."
+                        value={leadOutcomeReason}
+                        onChange={(event) => setLeadOutcomeReason(event.target.value)}
+                        disabled={savingLeadConversion}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      disabled={savingLeadConversion}
+                      onClick={() => updateLeadPostVisitOutcome("client_closed")}
+                    >
+                      {savingLeadConversion ? "Guardando..." : "Marcar como cliente cerrado"}
+                    </Button>
+                    <p className="text-xs text-muted-foreground">
+                      {activeLead.converted_to_client
+                        ? `Valor guardado: ${activeLead.converted_value_eur ?? 0} EUR`
+                        : `Motivo guardado: ${activeLead.post_visit_outcome_reason || "Sin motivo"} · Usa una etapa de seguimiento o no cierre.`}
+                    </p>
+                    {leadConversionError ? <p className="text-xs text-rose-600">{leadConversionError}</p> : null}
+                  </Card>
+                ) : null}
+
                 <Card className="space-y-3 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs text-muted-foreground">Canal WhatsApp para este lead</p>

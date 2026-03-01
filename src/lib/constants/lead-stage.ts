@@ -78,6 +78,30 @@ export const STAGE_TONE_ES: Record<string, StageTone> = {
     badge: "success",
     hint: "Cita cerrada",
   },
+  post_visit_pending_decision: {
+    mood: "Pendiente",
+    accent: "border-t-amber-400",
+    badge: "warning",
+    hint: "Visitó la clínica y está valorando la propuesta",
+  },
+  post_visit_follow_up: {
+    mood: "Seguimiento",
+    accent: "border-t-orange-400",
+    badge: "warning",
+    hint: "Hace falta seguimiento comercial tras la visita",
+  },
+  post_visit_not_closed: {
+    mood: "No cerró",
+    accent: "border-t-rose-300",
+    badge: "danger",
+    hint: "Tuvo visita, pero no se cerró la venta",
+  },
+  client_closed: {
+    mood: "Cerrado",
+    accent: "border-t-emerald-700",
+    badge: "success",
+    hint: "Cliente convertido con venta cerrada",
+  },
   not_interested: {
     mood: "Descartado",
     accent: "border-t-rose-400",
@@ -104,6 +128,10 @@ export const LEGACY_STATUS_FROM_STAGE: Record<string, string> = {
   whatsapp_followup_pending: "whatsapp_sent",
   whatsapp_failed_team_review: "no_response",
   visit_scheduled: "visit_scheduled",
+  post_visit_pending_decision: "contacted",
+  post_visit_follow_up: "contacted",
+  post_visit_not_closed: "not_interested",
+  client_closed: "visit_scheduled",
   not_interested: "not_interested",
   discarded: "not_interested",
 };
