@@ -273,7 +273,8 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
       ) : null}
       {lead.stage_key === "client_closed" && lead.converted_value_eur !== null && lead.converted_value_eur !== undefined ? (
         <p className="mt-2 text-xs font-medium text-emerald-700">
-          Cerrado: {Number(lead.converted_value_eur).toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
+          {lead.converted_service_name || "Servicio"}:{" "}
+          {Number(lead.converted_value_eur).toLocaleString("es-ES", { style: "currency", currency: "EUR" })}
         </p>
       ) : null}
     </button>
@@ -342,6 +343,7 @@ export function PipelineBoard() {
   const [updatingLeadBlock, setUpdatingLeadBlock] = useState(false);
   const [leadBlockError, setLeadBlockError] = useState<string | null>(null);
   const [leadConversionValue, setLeadConversionValue] = useState("");
+  const [leadClosedService, setLeadClosedService] = useState("");
   const [leadOutcomeReason, setLeadOutcomeReason] = useState("");
   const [savingLeadConversion, setSavingLeadConversion] = useState(false);
   const [leadConversionError, setLeadConversionError] = useState<string | null>(null);
@@ -467,6 +469,7 @@ export function PipelineBoard() {
   useEffect(() => {
     if (!activeLead) {
       setLeadConversionValue("");
+      setLeadClosedService("");
       setLeadOutcomeReason("");
       setLeadConversionError(null);
       return;
@@ -477,6 +480,7 @@ export function PipelineBoard() {
         ? ""
         : String(activeLead.converted_value_eur)
     );
+    setLeadClosedService(activeLead.converted_service_name || activeLead.treatment || "");
     setLeadOutcomeReason(activeLead.post_visit_outcome_reason || "");
     setLeadConversionError(null);
   }, [activeLead]);
@@ -621,6 +625,10 @@ export function PipelineBoard() {
         setLeadConversionError("Indica un valor económico válido para marcar el lead como cliente.");
         return;
       }
+      if (!leadClosedService.trim()) {
+        setLeadConversionError("Indica el servicio cerrado para guardar el lead como cliente.");
+        return;
+      }
     } else if (!leadOutcomeReason.trim()) {
       setLeadConversionError("Indica un motivo cuando el lead no se cierra.");
       return;
@@ -638,6 +646,7 @@ export function PipelineBoard() {
       actorId: profile?.user_id || null,
       source: "pipeline_board",
       convertedValueEur: requiresValue ? parsedValue : null,
+      convertedServiceName: requiresValue ? leadClosedService.trim() : null,
       outcomeReason: requiresValue ? null : leadOutcomeReason.trim(),
     });
 
@@ -787,6 +796,16 @@ export function PipelineBoard() {
                       </Button>
                     </div>
                     <div className="space-y-1.5">
+                      <p className="text-xs text-muted-foreground">Servicio cerrado</p>
+                      <Input
+                        type="text"
+                        placeholder="Ej. Indiba facial, relleno de labios..."
+                        value={leadClosedService}
+                        onChange={(event) => setLeadClosedService(event.target.value)}
+                        disabled={savingLeadConversion}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
                       <p className="text-xs text-muted-foreground">Valor real del tratamiento (EUR)</p>
                       <Input
                         type="number"
@@ -818,7 +837,7 @@ export function PipelineBoard() {
                     </Button>
                     <p className="text-xs text-muted-foreground">
                       {activeLead.converted_to_client
-                        ? `Valor guardado: ${activeLead.converted_value_eur ?? 0} EUR`
+                        ? `Servicio guardado: ${activeLead.converted_service_name || "Sin servicio"} · Valor guardado: ${activeLead.converted_value_eur ?? 0} EUR`
                         : `Motivo guardado: ${activeLead.post_visit_outcome_reason || "Sin motivo"} · Usa una etapa de seguimiento o no cierre.`}
                     </p>
                     {leadConversionError ? <p className="text-xs text-rose-600">{leadConversionError}</p> : null}

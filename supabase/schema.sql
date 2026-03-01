@@ -73,6 +73,7 @@ create table if not exists leads (
   status lead_status not null default 'new',
   converted_to_client boolean not null default false,
   converted_value_eur numeric(10,2),
+  converted_service_name text,
   converted_at timestamptz,
   post_visit_outcome_reason text,
   contacto_futuro timestamptz,
@@ -233,6 +234,7 @@ alter table if exists appointments
 alter table if exists leads
   add column if not exists converted_to_client boolean not null default false,
   add column if not exists converted_value_eur numeric(10,2),
+  add column if not exists converted_service_name text,
   add column if not exists converted_at timestamptz,
   add column if not exists post_visit_outcome_reason text;
 

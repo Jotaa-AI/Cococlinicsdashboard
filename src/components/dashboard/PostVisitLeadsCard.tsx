@@ -41,6 +41,7 @@ export function PostVisitLeadsCard() {
 
   const [rows, setRows] = useState<PostVisitLeadRow[]>([]);
   const [valueByLeadId, setValueByLeadId] = useState<Record<string, string>>({});
+  const [serviceByLeadId, setServiceByLeadId] = useState<Record<string, string>>({});
   const [reasonByLeadId, setReasonByLeadId] = useState<Record<string, string>>({});
   const [savingLeadId, setSavingLeadId] = useState<string | null>(null);
   const [errorByLeadId, setErrorByLeadId] = useState<Record<string, string>>({});
@@ -108,6 +109,17 @@ export function PostVisitLeadsCard() {
       return next;
     });
 
+    setServiceByLeadId((prev) => {
+      const next = { ...prev };
+      for (const row of nextRows) {
+        if (!row.lead) continue;
+        if (!(row.lead.id in next)) {
+          next[row.lead.id] = row.lead.converted_service_name || row.lead.treatment || "";
+        }
+      }
+      return next;
+    });
+
     setReasonByLeadId((prev) => {
       const next = { ...prev };
       for (const row of nextRows) {
@@ -158,6 +170,7 @@ export function PostVisitLeadsCard() {
 
       const lead = row.lead;
       const rawValue = (valueByLeadId[lead.id] || "").trim();
+      const rawService = (serviceByLeadId[lead.id] || "").trim();
       const rawReason = (reasonByLeadId[lead.id] || "").trim();
       const needsValue = targetStage === "client_closed";
       let parsedValue: number | null = null;
@@ -168,6 +181,13 @@ export function PostVisitLeadsCard() {
           setErrorByLeadId((prev) => ({
             ...prev,
             [lead.id]: "Indica un valor válido para cerrar el lead como cliente.",
+          }));
+          return;
+        }
+        if (!rawService) {
+          setErrorByLeadId((prev) => ({
+            ...prev,
+            [lead.id]: "Indica el servicio cerrado para guardar la conversión.",
           }));
           return;
         }
@@ -191,6 +211,7 @@ export function PostVisitLeadsCard() {
         actorId: profile?.user_id || null,
         source: "dashboard_post_visit",
         convertedValueEur: needsValue ? parsedValue : null,
+        convertedServiceName: needsValue ? rawService : null,
         outcomeReason: needsValue ? null : rawReason,
       });
 
@@ -211,7 +232,7 @@ export function PostVisitLeadsCard() {
       setSavingLeadId(null);
       await loadRows();
     },
-    [clinicId, profile?.role, profile?.user_id, reasonByLeadId, supabase, valueByLeadId, loadRows]
+    [clinicId, profile?.role, profile?.user_id, reasonByLeadId, serviceByLeadId, supabase, valueByLeadId, loadRows]
   );
 
   return (
@@ -278,6 +299,22 @@ export function PostVisitLeadsCard() {
                           </Button>
                         </div>
 
+                        <div className="flex flex-col gap-2">
+                          <p className="text-xs text-muted-foreground">Servicio que se ha cerrado</p>
+                          <Input
+                            type="text"
+                            placeholder="Servicio cerrado (ej. Indiba facial, ácido hialurónico...)"
+                            value={serviceByLeadId[lead.id] || ""}
+                            onChange={(event) =>
+                              setServiceByLeadId((prev) => ({
+                                ...prev,
+                                [lead.id]: event.target.value,
+                              }))
+                            }
+                            disabled={saving}
+                          />
+                        </div>
+
                         <div className="flex flex-col gap-2 sm:flex-row">
                           <Input
                             type="number"
@@ -306,6 +343,7 @@ export function PostVisitLeadsCard() {
                               ? "—"
                               : `${lead.converted_value_eur} EUR`}
                           </span>
+                          <span>Servicio guardado: {lead.converted_service_name || "—"}</span>
                           <span>Motivo guardado: {lead.post_visit_outcome_reason || "—"}</span>
                         </div>
 

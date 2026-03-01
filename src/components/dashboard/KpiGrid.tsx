@@ -19,6 +19,7 @@ interface KpiValues {
   noResponse: number;
   callCostTotal: number;
   clientsClosedMonth: number;
+  clientsClosedValueMonth: number;
 }
 
 const currencyPreciseFormatter = new Intl.NumberFormat("es-ES", {
@@ -41,6 +42,7 @@ export function KpiGrid() {
     noResponse: 0,
     callCostTotal: 0,
     clientsClosedMonth: 0,
+    clientsClosedValueMonth: 0,
   });
 
   const clinicId = profile?.clinic_id;
@@ -125,7 +127,7 @@ export function KpiGrid() {
         .order("ended_at", { ascending: false }),
       supabase
         .from("leads")
-        .select("id, converted_to_client, converted_at, stage_key, updated_at")
+        .select("id, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at")
         .eq("clinic_id", clinicId)
         .or("converted_to_client.eq.true,stage_key.eq.client_closed"),
     ]);
@@ -148,7 +150,7 @@ export function KpiGrid() {
 
     const leads30 = leads30d.count || 0;
     const contactedRate = leads30 ? Math.round(((contacted.count || 0) / leads30) * 100) : 0;
-    const clientsClosedMonth = (closedLeads.data || []).filter((lead) => {
+    const leadsClosedThisMonth = (closedLeads.data || []).filter((lead) => {
       const referenceDate =
         lead.converted_to_client && lead.converted_at
           ? lead.converted_at
@@ -159,7 +161,12 @@ export function KpiGrid() {
       if (!referenceDate) return false;
       const timestamp = new Date(referenceDate).getTime();
       return timestamp >= new Date(monthRange.startIso).getTime() && timestamp < new Date(monthRange.endIso).getTime();
-    }).length;
+    });
+    const clientsClosedMonth = leadsClosedThisMonth.length;
+    const clientsClosedValueMonth = leadsClosedThisMonth.reduce((acc, lead) => {
+      const parsedValue = parseNumeric(lead.converted_value_eur);
+      return acc + (parsedValue || 0);
+    }, 0);
 
     setKpis({
       leadsToday: leadsToday.count || 0,
@@ -170,6 +177,7 @@ export function KpiGrid() {
       noResponse: noResponse.count || 0,
       callCostTotal: Number(totalCallCost.toFixed(2)),
       clientsClosedMonth,
+      clientsClosedValueMonth: Number(clientsClosedValueMonth.toFixed(2)),
     });
   }, [supabase, clinicId, callCostPerMin, monthRange.startIso, monthRange.endIso]);
 
@@ -243,6 +251,7 @@ export function KpiGrid() {
       label: "Clientes cerrados",
       value: kpis.clientsClosedMonth,
       note: monthLabel,
+      detail: `Total cerrado: ${currencyPreciseFormatter.format(kpis.clientsClosedValueMonth)}`,
     },
   ];
 
@@ -278,6 +287,7 @@ export function KpiGrid() {
             <CardContent className="space-y-1">
               <p className="font-display text-2xl font-semibold sm:text-3xl">{card.value}</p>
               <p className="text-xs text-muted-foreground">{card.note}</p>
+              {"detail" in card && card.detail ? <p className="text-xs font-medium text-foreground/80">{card.detail}</p> : null}
             </CardContent>
           </Card>
         ))}

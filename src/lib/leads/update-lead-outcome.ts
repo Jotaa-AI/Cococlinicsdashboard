@@ -9,6 +9,7 @@ interface UpdateLeadOutcomeInput {
   actorId: string | null;
   source: string;
   convertedValueEur?: number | null;
+  convertedServiceName?: string | null;
   outcomeReason?: string | null;
 }
 
@@ -28,6 +29,7 @@ export async function updateLeadOutcome(input: UpdateLeadOutcomeInput): Promise<
     actorId,
     source,
     convertedValueEur = null,
+    convertedServiceName = null,
     outcomeReason = null,
   } = input;
 
@@ -50,6 +52,7 @@ export async function updateLeadOutcome(input: UpdateLeadOutcomeInput): Promise<
   const updatePayload = {
     converted_to_client: isClosed,
     converted_value_eur: isClosed ? convertedValueEur : null,
+    converted_service_name: isClosed ? convertedServiceName : null,
     converted_at: isClosed ? new Date().toISOString() : null,
     post_visit_outcome_reason: isClosed ? null : outcomeReason,
     updated_at: new Date().toISOString(),
@@ -77,6 +80,7 @@ export async function updateLeadOutcome(input: UpdateLeadOutcomeInput): Promise<
       actor_id: actorId,
       to_stage_key: toStageKey,
       converted_value_eur: isClosed ? convertedValueEur : null,
+      converted_service_name: isClosed ? convertedServiceName : null,
       post_visit_outcome_reason: isClosed ? null : outcomeReason,
     },
   });

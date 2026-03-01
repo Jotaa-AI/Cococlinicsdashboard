@@ -10,6 +10,7 @@ export interface Lead {
   status: string;
   converted_to_client: boolean;
   converted_value_eur: number | string | null;
+  converted_service_name: string | null;
   converted_at: string | null;
   post_visit_outcome_reason: string | null;
   contacto_futuro: string | null;
