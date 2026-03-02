@@ -119,12 +119,10 @@ export function KpiGrid() {
         .gte("start_at", new Date().toISOString()),
       supabase
         .from("calls")
-        .select("duration_sec, call_cost_eur")
+        .select("duration_sec, call_cost_eur, ended_at, started_at, created_at")
         .eq("clinic_id", clinicId)
         .eq("status", "ended")
-        .gte("ended_at", monthRange.startIso)
-        .lt("ended_at", monthRange.endIso)
-        .order("ended_at", { ascending: false }),
+        .order("created_at", { ascending: false }),
       supabase
         .from("leads")
         .select("id, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at")
@@ -141,7 +139,16 @@ export function KpiGrid() {
       return null;
     };
 
-    const totalCallCost = (endedCallsInMonth.data || []).reduce((acc, row) => {
+    const monthStartTs = new Date(monthRange.startIso).getTime();
+    const monthEndTs = new Date(monthRange.endIso).getTime();
+    const callsInSelectedMonth = (endedCallsInMonth.data || []).filter((row) => {
+      const referenceDate = row.ended_at || row.started_at || row.created_at;
+      if (!referenceDate) return false;
+      const timestamp = new Date(referenceDate).getTime();
+      return timestamp >= monthStartTs && timestamp < monthEndTs;
+    });
+
+    const totalCallCost = callsInSelectedMonth.reduce((acc, row) => {
       const persistedCost = parseNumeric(row.call_cost_eur);
       if (persistedCost !== null) return acc + persistedCost;
       if (!callCostPerMin) return acc;
