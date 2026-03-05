@@ -22,6 +22,10 @@ GOOGLE_CLIENT_SECRET=...
 GOOGLE_REDIRECT_URI=http://localhost:3000/api/gcal/callback
 GOOGLE_DEFAULT_CALENDAR_ID=primary
 GOOGLE_TOKEN_ENCRYPTION_KEY=... # base64 32 bytes
+NEXT_PUBLIC_GOOGLE_CALENDAR_ID=... # opcional, si no se usa GOOGLE_DEFAULT_CALENDAR_ID/primary
+NEXT_PUBLIC_GOOGLE_CALENDAR_TIMEZONE=Europe/Madrid
+NEXT_PUBLIC_GOOGLE_CALENDAR_EMBED_URL=... # opcional override iframe
+NEXT_PUBLIC_GOOGLE_CALENDAR_EDIT_URL=... # opcional override abrir en pestaña nueva
 NEXT_PUBLIC_CALL_COST_PER_MIN=1.5 # opcional
 NEXT_PUBLIC_GCAL_SYNC_INTERVAL_SEC=120 # opcional (sync automático)
 ```
@@ -151,9 +155,24 @@ curl -X POST http://localhost:3000/api/webhooks/appointment_created \
 ## Google Calendar
 1. Crea credenciales OAuth 2.0 en Google Cloud Console.
 2. Configura `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_REDIRECT_URI`.
-3. Inicia sesión en el dashboard, ve a `Settings` y conecta el calendario.
-4. Usa “Sync now” para importar eventos ocupados.
-5. La sincronización automática usa `NEXT_PUBLIC_GCAL_SYNC_INTERVAL_SEC` (por defecto 120s).
+3. Inicia sesión en el dashboard y ve a `/calendar`.
+4. Pulsa “Conectar Google” para autorizar la cuenta de la doctora.
+5. La agenda se muestra embebida por iframe y puedes abrirla en pestaña nueva si el login no aparece dentro del iframe.
+
+### Endpoint de disponibilidad para n8n/Retell
+`POST /api/gcal/availability` (requiere header `X-WEBHOOK-SECRET`):
+
+```bash
+curl -X POST http://localhost:3000/api/gcal/availability \
+  -H "Content-Type: application/json" \
+  -H "X-WEBHOOK-SECRET: $WEBHOOK_SECRET" \
+  -d '{
+    "clinic_id": "TU_CLINIC_ID",
+    "time_min": "2026-03-05T08:00:00Z",
+    "time_max": "2026-03-05T20:00:00Z",
+    "time_zone": "Europe/Madrid"
+  }'
+```
 
 ## Seed (opcional)
 ```bash

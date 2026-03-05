@@ -16,7 +16,13 @@ export async function GET(request: Request) {
   const { tokens } = await oauth2Client.getToken(code);
 
   if (!tokens.refresh_token) {
-    return NextResponse.json({ error: "No refresh token returned" }, { status: 400 });
+    return NextResponse.json(
+      {
+        error: "Google no devolvió refresh_token. Reintenta conectando de nuevo con consentimiento.",
+        reconnect_url: `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/gcal/connect`,
+      },
+      { status: 400 }
+    );
   }
 
   const supabase = createSupabaseAdminClient();
@@ -33,6 +39,6 @@ export async function GET(request: Request) {
     { onConflict: "clinic_id" }
   );
 
-  const redirectUrl = new URL("/calendar", process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000");
+  const redirectUrl = new URL("/calendar?gcal=connected", process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000");
   return NextResponse.redirect(redirectUrl);
 }
