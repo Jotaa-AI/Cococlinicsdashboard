@@ -8,41 +8,54 @@ function resolveRedirectUri(request: Request) {
 }
 
 export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const code = searchParams.get("code");
-  const clinicId = searchParams.get("state") || process.env.DEFAULT_CLINIC_ID;
+  try {
+    const { searchParams } = new URL(request.url);
+    const code = searchParams.get("code");
+    const clinicId = searchParams.get("state") || process.env.DEFAULT_CLINIC_ID;
 
-  if (!code || !clinicId) {
-    return NextResponse.json({ error: "Missing code" }, { status: 400 });
-  }
+    if (!code || !clinicId) {
+      return NextResponse.json({ error: "Missing code" }, { status: 400 });
+    }
 
-  const oauth2Client = getGoogleOAuthClient(resolveRedirectUri(request));
-  const { tokens } = await oauth2Client.getToken(code);
+    const oauth2Client = getGoogleOAuthClient(resolveRedirectUri(request));
+    const { tokens } = await oauth2Client.getToken(code);
 
-  if (!tokens.refresh_token) {
+    if (!tokens.refresh_token) {
+      return NextResponse.json(
+        {
+          error: "Google no devolvió refresh_token. Reintenta conectando de nuevo con consentimiento.",
+          reconnect_url: new URL("/api/gcal/connect", request.url).toString(),
+        },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createSupabaseAdminClient();
+    const calendarId = process.env.GOOGLE_DEFAULT_CALENDAR_ID || "primary";
+    const { error } = await supabase.from("calendar_connections").upsert(
+      {
+        clinic_id: clinicId,
+        google_refresh_token: encryptToken(tokens.refresh_token),
+        calendar_id: calendarId,
+        sync_token: null,
+        created_at: new Date().toISOString(),
+      },
+      { onConflict: "clinic_id" }
+    );
+
+    if (error) {
+      throw new Error(`Supabase error: ${error.message}`);
+    }
+
+    const redirectUrl = new URL("/calendar?gcal=connected", request.url);
+    return NextResponse.redirect(redirectUrl);
+  } catch (error: any) {
     return NextResponse.json(
       {
-        error: "Google no devolvió refresh_token. Reintenta conectando de nuevo con consentimiento.",
-        reconnect_url: new URL("/api/gcal/connect", request.url).toString(),
+        error: error?.message || "Google Calendar callback failed.",
+        hint: "Revisa GOOGLE_TOKEN_ENCRYPTION_KEY, SUPABASE_SERVICE_ROLE_KEY y la tabla calendar_connections.",
       },
-      { status: 400 }
+      { status: 500 }
     );
   }
-
-  const supabase = createSupabaseAdminClient();
-  const calendarId = process.env.GOOGLE_DEFAULT_CALENDAR_ID || "primary";
-
-  await supabase.from("calendar_connections").upsert(
-    {
-      clinic_id: clinicId,
-      google_refresh_token: encryptToken(tokens.refresh_token),
-      calendar_id: calendarId,
-      sync_token: null,
-      created_at: new Date().toISOString(),
-    },
-    { onConflict: "clinic_id" }
-  );
-
-  const redirectUrl = new URL("/calendar?gcal=connected", request.url);
-  return NextResponse.redirect(redirectUrl);
 }
