@@ -3,6 +3,10 @@ import { getGoogleOAuthClient } from "@/lib/google/client";
 import { encryptToken } from "@/lib/google/crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
+function resolveRedirectUri(request: Request) {
+  return new URL("/api/gcal/callback", request.url).toString();
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
@@ -12,14 +16,14 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing code" }, { status: 400 });
   }
 
-  const oauth2Client = getGoogleOAuthClient();
+  const oauth2Client = getGoogleOAuthClient(resolveRedirectUri(request));
   const { tokens } = await oauth2Client.getToken(code);
 
   if (!tokens.refresh_token) {
     return NextResponse.json(
       {
         error: "Google no devolvió refresh_token. Reintenta conectando de nuevo con consentimiento.",
-        reconnect_url: `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/gcal/connect`,
+        reconnect_url: new URL("/api/gcal/connect", request.url).toString(),
       },
       { status: 400 }
     );
@@ -39,6 +43,6 @@ export async function GET(request: Request) {
     { onConflict: "clinic_id" }
   );
 
-  const redirectUrl = new URL("/calendar?gcal=connected", process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000");
+  const redirectUrl = new URL("/calendar?gcal=connected", request.url);
   return NextResponse.redirect(redirectUrl);
 }
