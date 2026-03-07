@@ -1,13 +1,28 @@
+function sanitizeCalendarIds(ids: (string | null | undefined)[]) {
+  return Array.from(
+    new Set(
+      ids
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  );
+}
+
+export function normalizeCalendarSelection(
+  primaryCalendarId?: string | null,
+  selectedCalendarIds?: string[] | null
+) {
+  const normalizedPrimary = typeof primaryCalendarId === "string" ? primaryCalendarId.trim() : "";
+  const sanitizedSelected = sanitizeCalendarIds(selectedCalendarIds || []);
+
+  if (!normalizedPrimary) return sanitizedSelected;
+  return sanitizeCalendarIds([normalizedPrimary, ...sanitizedSelected]);
+}
+
 export function getSelectedCalendarIds(connection: {
   calendar_id?: string | null;
   selected_calendar_ids?: string[] | null;
 }) {
-  const selected = Array.isArray(connection.selected_calendar_ids)
-    ? connection.selected_calendar_ids.filter((value) => typeof value === "string" && value.trim().length > 0)
-    : [];
-
-  if (selected.length) return selected;
-  if (connection.calendar_id) return [connection.calendar_id];
-  return [];
+  return normalizeCalendarSelection(connection.calendar_id, connection.selected_calendar_ids);
 }
-

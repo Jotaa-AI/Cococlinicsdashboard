@@ -3,7 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { decryptToken } from "@/lib/google/crypto";
 import { getGoogleCalendarClient, getGoogleOAuthClient } from "@/lib/google/client";
-import { getSelectedCalendarIds } from "@/lib/google/connection";
+import { getSelectedCalendarIds, normalizeCalendarSelection } from "@/lib/google/connection";
 
 export async function GET() {
   const supabase = await createSupabaseServerClient();
@@ -27,6 +27,8 @@ export async function GET() {
       connected: false,
       clinic_id: null,
       calendar_id: null,
+      primary_calendar_id: null,
+      blocking_calendar_ids: [],
       selected_calendar_ids: [],
       connected_at: null,
       linked_email: null,
@@ -69,11 +71,14 @@ export async function GET() {
       if (primaryId) {
         resolvedCalendarId = primaryId;
         linkedEmail = primaryId.includes("@") ? primaryId : linkedEmail;
-        if (!selectedCalendarIds.length) {
-          selectedCalendarIds = [primaryId];
-        }
+        selectedCalendarIds = normalizeCalendarSelection(primaryId, selectedCalendarIds);
 
-        if (connection.calendar_id !== primaryId || !Array.isArray(connection.selected_calendar_ids)) {
+        const needsSelectionUpdate =
+          !Array.isArray(connection.selected_calendar_ids) ||
+          connection.selected_calendar_ids.length !== selectedCalendarIds.length ||
+          connection.selected_calendar_ids.some((value, index) => value !== selectedCalendarIds[index]);
+
+        if (connection.calendar_id !== primaryId || needsSelectionUpdate) {
           await admin
             .from("calendar_connections")
             .update({ calendar_id: primaryId, selected_calendar_ids: selectedCalendarIds })
@@ -89,6 +94,8 @@ export async function GET() {
     connected: Boolean(connection),
     clinic_id: clinicId,
     calendar_id: resolvedCalendarId,
+    primary_calendar_id: resolvedCalendarId,
+    blocking_calendar_ids: selectedCalendarIds,
     selected_calendar_ids: selectedCalendarIds,
     connected_at: connection?.created_at || null,
     linked_email: linkedEmail,

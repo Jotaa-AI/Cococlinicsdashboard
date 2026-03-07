@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { getGoogleOAuthClient, getGoogleCalendarClient } from "@/lib/google/client";
-import { decryptToken } from "@/lib/google/crypto";
 import { assertWebhookSecret } from "@/lib/utils/webhook";
 import { SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
-import { getSelectedCalendarIds } from "@/lib/google/connection";
+import { queryGoogleBusyRanges } from "@/lib/google/sync";
 
 interface CheckAvailabilityBody {
   clinic_id?: string;
@@ -47,6 +44,11 @@ function getZonedParts(date: Date, timeZone: string) {
   };
 }
 
+function roundUpToNextSlot(date: Date) {
+  const slotMs = SLOT_MINUTES * 60 * 1000;
+  return new Date(Math.ceil(date.getTime() / slotMs) * slotMs);
+}
+
 function isWeekday(weekday: string) {
   return ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(weekday);
 }
@@ -76,6 +78,44 @@ function sortByDistance(reference: Date, candidates: Date[]) {
   });
 }
 
+function toSlotPayload(startAt: Date, timeZone: string) {
+  const endAt = addMinutes(startAt, SLOT_MINUTES);
+  return {
+    start_at: startAt.toISOString(),
+    end_at: endAt.toISOString(),
+    label_es: formatSlotLabelEs(startAt, timeZone),
+  };
+}
+
+function getSpanishHourWord(hour24: number) {
+  const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  const words = [
+    "",
+    "una",
+    "dos",
+    "tres",
+    "cuatro",
+    "cinco",
+    "seis",
+    "siete",
+    "ocho",
+    "nueve",
+    "diez",
+    "once",
+    "doce",
+  ];
+  return words[hour12];
+}
+
+function formatSlotLabelEs(date: Date, timeZone: string) {
+  const weekday = new Intl.DateTimeFormat("es-ES", { weekday: "long", timeZone }).format(date);
+  const parts = getZonedParts(date, timeZone);
+  const hourLabel = getSpanishHourWord(parts.hour);
+  const minuteLabel = parts.minute === 30 ? " y media" : "";
+  const period = parts.hour < 13 ? "de la mañana" : "de la tarde";
+  return `${weekday} a las ${hourLabel}${minuteLabel} ${period}`;
+}
+
 export async function POST(request: Request) {
   if (!assertWebhookSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -100,67 +140,33 @@ export async function POST(request: Request) {
 
     const now = new Date();
     const requestedEnd = addMinutes(requestedDate, SLOT_MINUTES);
-
     const requestedValidation = validateSlotRange({
       startAt: requestedDate.toISOString(),
       endAt: requestedEnd.toISOString(),
       timeZone,
     });
 
-    const scanStart = new Date(Math.min(requestedDate.getTime(), now.getTime()) - 12 * 60 * 60 * 1000);
-    const scanEnd = new Date(requestedDate.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+    const searchOrigin = roundUpToNextSlot(new Date(Math.max(requestedDate.getTime(), now.getTime())));
+    const scanEnd = new Date(searchOrigin.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
+    const { connection, busy, selectedCalendarIds } = await queryGoogleBusyRanges({
+      clinicId,
+      timeMin: searchOrigin.toISOString(),
+      timeMax: scanEnd.toISOString(),
+      timeZone,
+    });
 
-    const supabase = createSupabaseAdminClient();
-    let { data: connection, error: connectionError } = await supabase
-      .from("calendar_connections")
-      .select("google_refresh_token, calendar_id, selected_calendar_ids")
-      .eq("clinic_id", clinicId)
-      .maybeSingle();
-
-    if (connectionError?.message?.includes("selected_calendar_ids")) {
-      const fallback = await supabase
-        .from("calendar_connections")
-        .select("google_refresh_token, calendar_id")
-        .eq("clinic_id", clinicId)
-        .maybeSingle();
-      connection = fallback.data as typeof connection;
-      connectionError = fallback.error;
-    }
-
-    if (connectionError) {
-      throw new Error(`Supabase error: ${connectionError.message}`);
-    }
     if (!connection) {
       return NextResponse.json(
         { ok: false, error: "No Google Calendar connection for clinic.", available: false, suggestions: [] },
         { status: 404 }
       );
     }
-
-    const oauth = getGoogleOAuthClient();
-    oauth.setCredentials({ refresh_token: decryptToken(connection.google_refresh_token) });
-    const calendar = getGoogleCalendarClient(oauth);
-    const selectedCalendarIds = getSelectedCalendarIds(connection);
     if (!selectedCalendarIds.length) {
       return NextResponse.json(
         { ok: false, error: "No selected calendars for clinic.", available: false, suggestions: [] },
         { status: 400 }
       );
     }
-
-    const freeBusyResponse = await calendar.freebusy.query({
-      requestBody: {
-        timeMin: scanStart.toISOString(),
-        timeMax: scanEnd.toISOString(),
-        timeZone,
-        items: selectedCalendarIds.map((id) => ({ id })),
-      },
-    });
-
-    const busy = selectedCalendarIds
-      .flatMap((calendarId) => freeBusyResponse.data.calendars?.[calendarId]?.busy || [])
-      .map((block) => ({ start: parseIsoDate(block.start || undefined), end: parseIsoDate(block.end || undefined) }))
-      .filter((block): block is BusyRange => Boolean(block.start && block.end));
 
     const requestedInFuture = requestedDate.getTime() >= now.getTime();
     const requestedBlocked = overlapsBusy(requestedDate, requestedEnd, busy);
@@ -174,12 +180,12 @@ export async function POST(request: Request) {
         time_zone: timeZone,
         requested_ts: requestedDate.toISOString(),
         available: true,
-        suggestions: [requestedDate.toISOString()],
+        suggestions: [toSlotPayload(requestedDate, timeZone)],
       });
     }
 
     const allAvailableSlots: Date[] = [];
-    for (let cursor = new Date(scanStart); cursor <= scanEnd; cursor = addMinutes(cursor, SLOT_MINUTES)) {
+    for (let cursor = new Date(searchOrigin); cursor <= scanEnd; cursor = addMinutes(cursor, SLOT_MINUTES)) {
       if (cursor < now) continue;
       if (!isCandidateStart(cursor, timeZone)) continue;
 
@@ -203,7 +209,7 @@ export async function POST(request: Request) {
       time_zone: timeZone,
       requested_ts: requestedDate.toISOString(),
       available: false,
-      suggestions: closest.map((item) => item.toISOString()),
+      suggestions: closest.map((item) => toSlotPayload(item, timeZone)),
       reason: requestedValidation.ok
         ? requestedInFuture
           ? "requested_slot_busy"
