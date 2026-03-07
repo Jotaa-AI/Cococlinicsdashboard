@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getGoogleOAuthClient } from "@/lib/google/client";
+import { getGoogleOAuthClient, getGoogleCalendarClient } from "@/lib/google/client";
 import { encryptToken } from "@/lib/google/crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 
@@ -31,7 +31,18 @@ export async function GET(request: Request) {
     }
 
     const supabase = createSupabaseAdminClient();
-    const calendarId = process.env.GOOGLE_DEFAULT_CALENDAR_ID || "primary";
+    const fallbackCalendarId = process.env.GOOGLE_DEFAULT_CALENDAR_ID || "primary";
+    let calendarId = fallbackCalendarId;
+
+    // Try to store the real primary calendar id (usually the linked account email).
+    oauth2Client.setCredentials(tokens);
+    try {
+      const calendar = getGoogleCalendarClient(oauth2Client);
+      const primary = await calendar.calendarList.get({ calendarId: "primary" });
+      calendarId = primary.data.id || fallbackCalendarId;
+    } catch {
+      calendarId = fallbackCalendarId;
+    }
     const { error } = await supabase.from("calendar_connections").upsert(
       {
         clinic_id: clinicId,

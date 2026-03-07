@@ -10,6 +10,7 @@ interface GoogleCalendarStatus {
   clinic_id: string | null;
   calendar_id: string | null;
   connected_at: string | null;
+  linked_email?: string | null;
 }
 
 function buildEmbedUrl(calendarId: string, timezone: string) {
@@ -109,6 +110,11 @@ export function GoogleCalendarEmbed() {
             Estado: {status?.connected ? "Conectado" : "No conectado"} · Calendario:{" "}
             <span className="font-medium text-foreground">{resolvedCalendarId}</span>
           </p>
+          {status?.linked_email ? (
+            <p className="text-xs text-muted-foreground">
+              Cuenta vinculada: <span className="font-medium text-foreground">{status.linked_email}</span>
+            </p>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             Si el login de Google no aparece dentro del iframe, usa “Abrir en pestaña nueva”.
           </p>
