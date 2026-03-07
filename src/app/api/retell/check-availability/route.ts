@@ -123,7 +123,7 @@ export async function POST(request: Request) {
 
   try {
     const body = (await request.json().catch(() => null)) as CheckAvailabilityBody | null;
-    const clinicId = body?.clinic_id;
+    const clinicId = body?.clinic_id || process.env.DEFAULT_CLINIC_ID;
     const requestedRaw = body?.appointment_requested_ts || body?.appointment_available_ts;
     const timeZone = body?.time_zone || "Europe/Madrid";
     const requestedDate = parseIsoDate(requestedRaw);
@@ -132,7 +132,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            "Invalid payload. Required: clinic_id and appointment_requested_ts (ISO). Also accepts appointment_available_ts for backward compatibility.",
+            "Invalid payload. Required: appointment_requested_ts (ISO). Also accepts appointment_available_ts for backward compatibility.",
         },
         { status: 400 }
       );
