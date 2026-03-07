@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { decryptToken } from "@/lib/google/crypto";
 import { getGoogleCalendarClient, getGoogleOAuthClient } from "@/lib/google/client";
+import { getSelectedCalendarIds } from "@/lib/google/connection";
 
 export async function GET() {
   const supabase = await createSupabaseServerClient();
@@ -26,23 +27,35 @@ export async function GET() {
       connected: false,
       clinic_id: null,
       calendar_id: null,
+      selected_calendar_ids: [],
       connected_at: null,
       linked_email: null,
     });
   }
 
   const admin = createSupabaseAdminClient();
-  const { data: connection, error } = await admin
+  let { data: connection, error } = await admin
     .from("calendar_connections")
-    .select("clinic_id, calendar_id, google_refresh_token, created_at")
+    .select("clinic_id, calendar_id, selected_calendar_ids, google_refresh_token, created_at")
     .eq("clinic_id", clinicId)
     .maybeSingle();
+
+  if (error?.message?.includes("selected_calendar_ids")) {
+    const fallback = await admin
+      .from("calendar_connections")
+      .select("clinic_id, calendar_id, google_refresh_token, created_at")
+      .eq("clinic_id", clinicId)
+      .maybeSingle();
+    connection = fallback.data as typeof connection;
+    error = fallback.error;
+  }
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
   let resolvedCalendarId = connection?.calendar_id || null;
+  let selectedCalendarIds = connection ? getSelectedCalendarIds(connection) : [];
   let linkedEmail: string | null = resolvedCalendarId && resolvedCalendarId.includes("@") ? resolvedCalendarId : null;
 
   if (connection?.google_refresh_token) {
@@ -56,9 +69,15 @@ export async function GET() {
       if (primaryId) {
         resolvedCalendarId = primaryId;
         linkedEmail = primaryId.includes("@") ? primaryId : linkedEmail;
+        if (!selectedCalendarIds.length) {
+          selectedCalendarIds = [primaryId];
+        }
 
-        if (connection.calendar_id !== primaryId) {
-          await admin.from("calendar_connections").update({ calendar_id: primaryId }).eq("clinic_id", clinicId);
+        if (connection.calendar_id !== primaryId || !Array.isArray(connection.selected_calendar_ids)) {
+          await admin
+            .from("calendar_connections")
+            .update({ calendar_id: primaryId, selected_calendar_ids: selectedCalendarIds })
+            .eq("clinic_id", clinicId);
         }
       }
     } catch {
@@ -70,6 +89,7 @@ export async function GET() {
     connected: Boolean(connection),
     clinic_id: clinicId,
     calendar_id: resolvedCalendarId,
+    selected_calendar_ids: selectedCalendarIds,
     connected_at: connection?.created_at || null,
     linked_email: linkedEmail,
   });

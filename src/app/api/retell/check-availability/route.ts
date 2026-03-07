@@ -4,6 +4,7 @@ import { getGoogleOAuthClient, getGoogleCalendarClient } from "@/lib/google/clie
 import { decryptToken } from "@/lib/google/crypto";
 import { assertWebhookSecret } from "@/lib/utils/webhook";
 import { SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
+import { getSelectedCalendarIds } from "@/lib/google/connection";
 
 interface CheckAvailabilityBody {
   clinic_id?: string;
@@ -110,11 +111,21 @@ export async function POST(request: Request) {
     const scanEnd = new Date(requestedDate.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
 
     const supabase = createSupabaseAdminClient();
-    const { data: connection, error: connectionError } = await supabase
+    let { data: connection, error: connectionError } = await supabase
       .from("calendar_connections")
-      .select("google_refresh_token, calendar_id")
+      .select("google_refresh_token, calendar_id, selected_calendar_ids")
       .eq("clinic_id", clinicId)
       .maybeSingle();
+
+    if (connectionError?.message?.includes("selected_calendar_ids")) {
+      const fallback = await supabase
+        .from("calendar_connections")
+        .select("google_refresh_token, calendar_id")
+        .eq("clinic_id", clinicId)
+        .maybeSingle();
+      connection = fallback.data as typeof connection;
+      connectionError = fallback.error;
+    }
 
     if (connectionError) {
       throw new Error(`Supabase error: ${connectionError.message}`);
@@ -129,17 +140,25 @@ export async function POST(request: Request) {
     const oauth = getGoogleOAuthClient();
     oauth.setCredentials({ refresh_token: decryptToken(connection.google_refresh_token) });
     const calendar = getGoogleCalendarClient(oauth);
+    const selectedCalendarIds = getSelectedCalendarIds(connection);
+    if (!selectedCalendarIds.length) {
+      return NextResponse.json(
+        { ok: false, error: "No selected calendars for clinic.", available: false, suggestions: [] },
+        { status: 400 }
+      );
+    }
 
     const freeBusyResponse = await calendar.freebusy.query({
       requestBody: {
         timeMin: scanStart.toISOString(),
         timeMax: scanEnd.toISOString(),
         timeZone,
-        items: [{ id: connection.calendar_id }],
+        items: selectedCalendarIds.map((id) => ({ id })),
       },
     });
 
-    const busy = (freeBusyResponse.data.calendars?.[connection.calendar_id]?.busy || [])
+    const busy = selectedCalendarIds
+      .flatMap((calendarId) => freeBusyResponse.data.calendars?.[calendarId]?.busy || [])
       .map((block) => ({ start: parseIsoDate(block.start || undefined), end: parseIsoDate(block.end || undefined) }))
       .filter((block): block is BusyRange => Boolean(block.start && block.end));
 
@@ -151,7 +170,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         ok: true,
         clinic_id: clinicId,
-        calendar_id: connection.calendar_id,
+        calendar_ids: selectedCalendarIds,
         time_zone: timeZone,
         requested_ts: requestedDate.toISOString(),
         available: true,
@@ -180,7 +199,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       clinic_id: clinicId,
-      calendar_id: connection.calendar_id,
+      calendar_ids: selectedCalendarIds,
       time_zone: timeZone,
       requested_ts: requestedDate.toISOString(),
       available: false,

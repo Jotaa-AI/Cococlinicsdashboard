@@ -183,6 +183,13 @@ create index if not exists calendar_events_start_at_idx on calendar_events (star
 -- Backward-compatible upgrades for existing databases
 alter table if exists appointments add column if not exists title text;
 alter table if exists clinics add column if not exists avg_treatment_price_eur numeric(10,2) not null default 399;
+alter table if exists calendar_connections add column if not exists selected_calendar_ids text[];
+
+update calendar_connections
+set selected_calendar_ids = array[calendar_id]
+where (selected_calendar_ids is null or cardinality(selected_calendar_ids) = 0)
+  and calendar_id is not null;
+
 update clinics
 set avg_treatment_price_eur = 399
 where avg_treatment_price_eur is null;

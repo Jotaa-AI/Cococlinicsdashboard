@@ -9,8 +9,22 @@ interface GoogleCalendarStatus {
   connected: boolean;
   clinic_id: string | null;
   calendar_id: string | null;
+  selected_calendar_ids?: string[];
   connected_at: string | null;
   linked_email?: string | null;
+}
+
+interface GoogleCalendarItem {
+  id: string;
+  summary: string;
+  primary: boolean;
+  access_role: string;
+}
+
+interface GoogleCalendarsPayload {
+  connected: boolean;
+  calendars: GoogleCalendarItem[];
+  selected_calendar_ids: string[];
 }
 
 function buildEmbedUrl(calendarId: string, timezone: string) {
@@ -39,6 +53,10 @@ export function GoogleCalendarEmbed() {
 
   const [status, setStatus] = useState<GoogleCalendarStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
+  const [calendars, setCalendars] = useState<GoogleCalendarItem[]>([]);
+  const [selectedCalendarIds, setSelectedCalendarIds] = useState<string[]>([]);
+  const [savingCalendars, setSavingCalendars] = useState(false);
+  const [calendarMessage, setCalendarMessage] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     setLoadingStatus(true);
@@ -55,6 +73,57 @@ export function GoogleCalendarEmbed() {
   useEffect(() => {
     loadStatus();
   }, [loadStatus]);
+
+  const loadCalendars = useCallback(async () => {
+    const response = await fetch("/api/gcal/calendars", { cache: "no-store" });
+    if (!response.ok) {
+      setCalendars([]);
+      setSelectedCalendarIds([]);
+      return;
+    }
+    const payload = (await response.json()) as GoogleCalendarsPayload;
+    setCalendars(payload.calendars || []);
+    setSelectedCalendarIds(payload.selected_calendar_ids || []);
+  }, []);
+
+  useEffect(() => {
+    if (!status?.connected) return;
+    loadCalendars();
+  }, [status?.connected, loadCalendars]);
+
+  const toggleCalendar = (calendarId: string) => {
+    setCalendarMessage(null);
+    setSelectedCalendarIds((prev) => {
+      if (prev.includes(calendarId)) return prev.filter((id) => id !== calendarId);
+      return [...prev, calendarId];
+    });
+  };
+
+  const saveSelectedCalendars = async () => {
+    if (!selectedCalendarIds.length) {
+      setCalendarMessage("Selecciona al menos un calendario.");
+      return;
+    }
+
+    setSavingCalendars(true);
+    setCalendarMessage(null);
+    const response = await fetch("/api/gcal/calendars", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ calendar_ids: selectedCalendarIds }),
+    });
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      setCalendarMessage(payload?.error || "No se pudo guardar la selección.");
+      setSavingCalendars(false);
+      return;
+    }
+
+    setCalendarMessage("Calendarios guardados correctamente.");
+    await Promise.all([loadStatus(), loadCalendars()]);
+    setSavingCalendars(false);
+  };
 
   const resolvedCalendarId = status?.calendar_id || envCalendarId || "primary";
   const embedUrl = useMemo(() => {
@@ -140,6 +209,42 @@ export function GoogleCalendarEmbed() {
           </Button>
         </div>
       </div>
+
+      {status?.connected ? (
+        <div className="rounded-xl border border-border bg-white p-4">
+          <p className="text-sm font-semibold">Selecciona los calendarios que tus agentes podran usar para gestionar citas</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Solo se ofreceran huecos libres cuando todos los calendarios seleccionados esten disponibles.
+          </p>
+          <div className="mt-3 max-h-48 space-y-2 overflow-auto rounded-md border border-border p-3">
+            {calendars.length ? (
+              calendars.map((calendar) => (
+                <label key={calendar.id} className="flex cursor-pointer items-start gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 h-4 w-4"
+                    checked={selectedCalendarIds.includes(calendar.id)}
+                    onChange={() => toggleCalendar(calendar.id)}
+                  />
+                  <span className="leading-5">
+                    <span className="font-medium text-foreground">{calendar.summary}</span>
+                    {calendar.primary ? <span className="text-xs text-muted-foreground"> · Principal</span> : null}
+                    <span className="block text-xs text-muted-foreground">{calendar.id}</span>
+                  </span>
+                </label>
+              ))
+            ) : (
+              <p className="text-xs text-muted-foreground">No se han encontrado calendarios disponibles en esta cuenta.</p>
+            )}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" onClick={saveSelectedCalendars} disabled={savingCalendars}>
+              {savingCalendars ? "Guardando..." : "Guardar seleccion"}
+            </Button>
+            {calendarMessage ? <p className="text-xs text-muted-foreground">{calendarMessage}</p> : null}
+          </div>
+        </div>
+      ) : null}
 
       <div className="overflow-hidden rounded-2xl border border-border bg-white">
         <iframe title="Google Calendar" src={embedUrl} className="h-[78vh] min-h-[620px] w-full" loading="lazy" />

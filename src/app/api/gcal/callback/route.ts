@@ -43,16 +43,32 @@ export async function GET(request: Request) {
     } catch {
       calendarId = fallbackCalendarId;
     }
-    const { error } = await supabase.from("calendar_connections").upsert(
+    let { error } = await supabase.from("calendar_connections").upsert(
       {
         clinic_id: clinicId,
         google_refresh_token: encryptToken(tokens.refresh_token),
         calendar_id: calendarId,
+        selected_calendar_ids: [calendarId],
         sync_token: null,
         created_at: new Date().toISOString(),
       },
       { onConflict: "clinic_id" }
     );
+
+    // Backward compatibility if selected_calendar_ids column is not present yet.
+    if (error?.message?.includes("selected_calendar_ids")) {
+      const retry = await supabase.from("calendar_connections").upsert(
+        {
+          clinic_id: clinicId,
+          google_refresh_token: encryptToken(tokens.refresh_token),
+          calendar_id: calendarId,
+          sync_token: null,
+          created_at: new Date().toISOString(),
+        },
+        { onConflict: "clinic_id" }
+      );
+      error = retry.error;
+    }
 
     if (error) {
       throw new Error(`Supabase error: ${error.message}`);

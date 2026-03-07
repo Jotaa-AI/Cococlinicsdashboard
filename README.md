@@ -64,6 +64,12 @@ Para guardar nombre y teléfono también dentro de `appointments`:
 - pégalo y ejecútalo en Supabase SQL Editor
 - esta migración deja los campos finales como `appointments.lead_name` y `appointments.lead_phone`
 
+Para habilitar selección de múltiples calendarios Google por clínica:
+
+- abre `supabase/migrations/20260307_gcal_selected_calendars.sql`
+- copia su contenido
+- pégalo y ejecútalo en Supabase SQL Editor
+
 RPCs clave para n8n:
 
 - `rpc_find_nearest_slots(p_clinic_id, p_requested_start, p_window_hours, p_limit, p_timezone)`
