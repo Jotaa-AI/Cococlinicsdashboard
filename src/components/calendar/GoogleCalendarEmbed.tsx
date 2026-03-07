@@ -27,9 +27,8 @@ interface GoogleCalendarsPayload {
   selected_calendar_ids: string[];
 }
 
-function buildEmbedUrl(calendarId: string, timezone: string) {
+function buildEmbedUrl(calendarIds: string[], timezone: string) {
   const params = new URLSearchParams({
-    src: calendarId,
     ctz: timezone,
     mode: "WEEK",
     showTitle: "0",
@@ -38,6 +37,9 @@ function buildEmbedUrl(calendarId: string, timezone: string) {
     showCalendars: "0",
     showTz: "0",
   });
+  for (const calendarId of calendarIds) {
+    params.append("src", calendarId);
+  }
   return `https://calendar.google.com/calendar/embed?${params.toString()}`;
 }
 
@@ -126,11 +128,16 @@ export function GoogleCalendarEmbed() {
   };
 
   const resolvedCalendarId = status?.calendar_id || envCalendarId || "primary";
+  const effectiveSelectedCalendarIds = useMemo(() => {
+    if (selectedCalendarIds.length) return selectedCalendarIds;
+    if (status?.selected_calendar_ids?.length) return status.selected_calendar_ids;
+    return [resolvedCalendarId];
+  }, [resolvedCalendarId, selectedCalendarIds, status?.selected_calendar_ids]);
   const embedUrl = useMemo(() => {
     if (explicitEmbedUrl) return explicitEmbedUrl;
     if (!status?.connected && !envCalendarId) return "";
-    return buildEmbedUrl(resolvedCalendarId, timezone);
-  }, [explicitEmbedUrl, status?.connected, envCalendarId, resolvedCalendarId, timezone]);
+    return buildEmbedUrl(effectiveSelectedCalendarIds, timezone);
+  }, [explicitEmbedUrl, status?.connected, envCalendarId, effectiveSelectedCalendarIds, timezone]);
 
   const editUrl = useMemo(() => {
     if (explicitEditUrl) return explicitEditUrl;
@@ -178,6 +185,10 @@ export function GoogleCalendarEmbed() {
           <p className="text-xs text-muted-foreground">
             Estado: {status?.connected ? "Conectado" : "No conectado"} · Calendario:{" "}
             <span className="font-medium text-foreground">{resolvedCalendarId}</span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Calendarios visibles en agenda:{" "}
+            <span className="font-medium text-foreground">{effectiveSelectedCalendarIds.length}</span>
           </p>
           {status?.linked_email ? (
             <p className="text-xs text-muted-foreground">
