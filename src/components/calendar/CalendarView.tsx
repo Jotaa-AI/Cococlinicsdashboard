@@ -10,7 +10,7 @@ import type { EventClickArg, EventInput, DateSelectArg } from "@fullcalendar/cor
 import type { DateClickArg } from "@fullcalendar/interaction";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
-import type { Appointment, BusyBlock } from "@/lib/types";
+import type { Appointment } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -82,6 +82,9 @@ function normalizeEsPhone(rawPhone: string) {
 }
 
 function buildAppointmentTitle(item: Appointment) {
+  if (item.entry_type === "internal_block") {
+    return item.title || item.notes || "No disponible";
+  }
   const label = item.lead_name || item.title || "Cita";
   const treatment = item.title && item.lead_name ? item.title : null;
   return treatment ? `${label} · ${treatment}` : label;
@@ -152,69 +155,46 @@ export function CalendarView() {
   const [formNotice, setFormNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const buildEvents = useCallback((appointments: Appointment[], blocks: BusyBlock[]) => {
-    const appts: CalendarEventItem[] = appointments.map((item) => ({
+  const buildEvents = useCallback((appointments: Appointment[]) => {
+    const mapped: CalendarEventItem[] = appointments.map((item) => ({
       id: `appointment-${item.id}`,
       title: buildAppointmentTitle(item),
       start: item.start_at,
       end: item.end_at,
-      backgroundColor: "#233b57",
-      borderColor: "#233b57",
+      backgroundColor: item.entry_type === "internal_block" ? "#d95f4f" : "#233b57",
+      borderColor: item.entry_type === "internal_block" ? "#d95f4f" : "#233b57",
       textColor: "#fff",
       extendedProps: {
         sourceId: item.id,
-        entryType: "appointment",
-        leadName: item.lead_name,
-        leadPhone: item.lead_phone,
+        entryType: item.entry_type === "internal_block" ? "busy_block" : "appointment",
+        leadName: item.entry_type === "lead_visit" ? item.lead_name : null,
+        leadPhone: item.entry_type === "lead_visit" ? item.lead_phone : null,
         formTitle: item.title,
         notes: item.notes,
+        reason: item.entry_type === "internal_block" ? item.title || item.notes : null,
       },
     }));
 
-    const busy: CalendarEventItem[] = blocks.map((item) => ({
-      id: `busy-block-${item.id}`,
-      title: item.reason || "Bloqueado",
-      start: item.start_at,
-      end: item.end_at,
-      backgroundColor: "#d95f4f",
-      borderColor: "#d95f4f",
-      textColor: "#fff",
-      extendedProps: {
-        sourceId: item.id,
-        entryType: "busy_block",
-        reason: item.reason,
-        formTitle: item.reason,
-      },
-    }));
-
-    setEvents([...appts, ...busy]);
+    setEvents(mapped);
   }, []);
 
   const loadEvents = useCallback(async () => {
     if (!clinicId || !range) return;
 
-    const [appointmentsResponse, busyBlocksResponse] = await Promise.all([
-      supabase
-        .from("appointments")
-        .select("*")
-        .eq("clinic_id", clinicId)
-        .lt("start_at", range.end)
-        .gt("end_at", range.start)
-        .neq("status", "canceled")
-        .order("start_at", { ascending: true }),
-      supabase
-        .from("busy_blocks")
-        .select("*")
-        .eq("clinic_id", clinicId)
-        .lt("start_at", range.end)
-        .gt("end_at", range.start)
-        .order("start_at", { ascending: true }),
-    ]);
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("clinic_id", clinicId)
+      .lt("start_at", range.end)
+      .gt("end_at", range.start)
+      .neq("status", "canceled")
+      .order("start_at", { ascending: true });
 
-    buildEvents(
-      (appointmentsResponse.data || []) as Appointment[],
-      (busyBlocksResponse.data || []) as BusyBlock[]
-    );
+    if (error) {
+      return;
+    }
+
+    buildEvents((data || []) as Appointment[]);
   }, [buildEvents, clinicId, range, supabase]);
 
   useEffect(() => {
@@ -229,11 +209,6 @@ export function CalendarView() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "appointments", filter: `clinic_id=eq.${clinicId}` },
-        loadEvents
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "busy_blocks", filter: `clinic_id=eq.${clinicId}` },
         loadEvents
       )
       .subscribe();
@@ -265,24 +240,22 @@ export function CalendarView() {
 
   const handleEventClick = useCallback((arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
-    if (arg.event.extendedProps.entryType !== "appointment") {
-      return;
-    }
 
     const start = arg.event.start;
     const end = arg.event.end;
     if (!start || !end) return;
 
+    const entryType = arg.event.extendedProps.entryType === "busy_block" ? "busy_block" : "appointment";
     setDialogMode("edit");
     setDraftEntry({
       sourceId: String(arg.event.extendedProps.sourceId),
-      type: "appointment",
+      type: entryType,
       date: toDateInputValue(start),
       startTime: toTimeInputValue(start),
       endTime: toTimeInputValue(end),
-      title: String(arg.event.extendedProps.formTitle || ""),
-      leadName: String(arg.event.extendedProps.leadName || ""),
-      leadPhone: String(arg.event.extendedProps.leadPhone || "+34"),
+      title: String(arg.event.extendedProps.formTitle || arg.event.extendedProps.reason || ""),
+      leadName: entryType === "appointment" ? String(arg.event.extendedProps.leadName || "") : "",
+      leadPhone: entryType === "appointment" ? String(arg.event.extendedProps.leadPhone || "+34") : "+34",
     });
     setFormError(null);
     setFormNotice(null);
@@ -343,7 +316,9 @@ export function CalendarView() {
         lead_phone: normalizedPhone,
         start_at: slot.startAt,
         end_at: slot.endAt,
-        ...(dialogMode === "edit" ? { appointment_id: draftEntry.sourceId } : { entry_type: "appointment", created_by: "staff" }),
+        ...(dialogMode === "edit"
+          ? { appointment_id: draftEntry.sourceId }
+          : { entry_type: "appointment", created_by: "staff" }),
       };
 
       try {
@@ -386,11 +361,24 @@ export function CalendarView() {
 
     try {
       setLoading(true);
-      const response = await fetch("/api/appointments/manual-booking", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetch(
+        dialogMode === "edit" ? "/api/appointments/reschedule" : "/api/appointments/manual-booking",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            dialogMode === "edit"
+              ? {
+                  appointment_id: draftEntry.sourceId,
+                  title: draftEntry.title.trim(),
+                  notes: draftEntry.title.trim(),
+                  start_at: slot.startAt,
+                  end_at: slot.endAt,
+                }
+              : payload
+          ),
+        }
+      );
 
       const responsePayload = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -408,7 +396,7 @@ export function CalendarView() {
   }, [dialogMode, draftEntry, loadEvents, resetDialog]);
 
   const handleCancelAppointment = useCallback(async () => {
-    if (!draftEntry?.sourceId || dialogMode !== "edit" || draftEntry.type !== "appointment") {
+    if (!draftEntry?.sourceId || dialogMode !== "edit") {
       return;
     }
 
@@ -422,7 +410,10 @@ export function CalendarView() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           appointment_id: draftEntry.sourceId,
-          reason: `Cancelada desde la agenda de la app${draftEntry.title.trim() ? `: ${draftEntry.title.trim()}` : ""}`,
+          reason:
+            draftEntry.type === "appointment"
+              ? `Cancelada desde la agenda de la app${draftEntry.title.trim() ? `: ${draftEntry.title.trim()}` : ""}`
+              : `Bloqueo eliminado desde la agenda de la app${draftEntry.title.trim() ? `: ${draftEntry.title.trim()}` : ""}`,
         }),
       });
 
@@ -664,9 +655,9 @@ export function CalendarView() {
               {formNotice ? <p className="md:col-span-2 text-sm text-amber-600">{formNotice}</p> : null}
 
               <div className="md:col-span-2 flex justify-end gap-2">
-                {dialogMode === "edit" && draftEntry.type === "appointment" ? (
+                {dialogMode === "edit" ? (
                   <Button type="button" variant="outline" onClick={handleCancelAppointment} disabled={loading}>
-                    {loading ? "Cancelando..." : "Cancelar cita"}
+                    {loading ? "Cancelando..." : draftEntry.type === "appointment" ? "Cancelar cita" : "Eliminar bloqueo"}
                   </Button>
                 ) : null}
                 <Button type="button" variant="outline" onClick={resetDialog} disabled={loading}>

@@ -115,6 +115,7 @@ export function KpiGrid() {
         .from("appointments")
         .select("id", { count: "exact", head: true })
         .eq("clinic_id", clinicId)
+        .eq("entry_type", "lead_visit")
         .eq("status", "scheduled")
         .gte("start_at", new Date().toISOString()),
       supabase

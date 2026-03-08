@@ -128,6 +128,7 @@ export async function POST(request: Request) {
 
   const appointmentPayload = {
     clinic_id: clinicId,
+    entry_type: "lead_visit",
     lead_id: leadId,
     lead_name: appointmentLeadName || null,
     lead_phone: appointmentLeadPhone || null,

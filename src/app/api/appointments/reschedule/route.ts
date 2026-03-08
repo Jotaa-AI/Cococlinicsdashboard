@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { validateSlotRange } from "@/lib/calendar/slot-rules";
+import { validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 
 function normalizeEsPhone(rawPhone: string) {
@@ -44,15 +44,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "appointment_id y start_at son obligatorios" }, { status: 400 });
   }
 
-  const slot = validateSlotRange({
-    startAt: String(body.start_at),
-    endAt: body.end_at ? String(body.end_at) : null,
-  });
-
-  if (!slot.ok) {
-    return NextResponse.json({ error: slot.error }, { status: 400 });
-  }
-
   const admin = createSupabaseAdminClient();
   const leadName = typeof body.lead_name === "string" ? body.lead_name.trim() : "";
   const leadPhoneRaw = typeof body.lead_phone === "string" ? body.lead_phone : "";
@@ -67,13 +58,24 @@ export async function POST(request: Request) {
 
   const { data: existingAppointment, error: existingAppointmentError } = await admin
     .from("appointments")
-    .select("id, lead_id")
+    .select("id, lead_id, entry_type")
     .eq("clinic_id", profile.clinic_id)
     .eq("id", body.appointment_id)
     .single();
 
   if (existingAppointmentError || !existingAppointment) {
     return NextResponse.json({ error: "No se encontro la cita a modificar." }, { status: 404 });
+  }
+
+  const validator =
+    existingAppointment.entry_type === "internal_block" ? validateBusyBlockRange : validateSlotRange;
+  const slot = validator({
+    startAt: String(body.start_at),
+    endAt: body.end_at ? String(body.end_at) : null,
+  });
+
+  if (!slot.ok) {
+    return NextResponse.json({ error: slot.error }, { status: 400 });
   }
 
   const availability = await checkSlotAvailability({

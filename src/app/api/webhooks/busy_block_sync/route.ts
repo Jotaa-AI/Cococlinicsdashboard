@@ -12,9 +12,11 @@ export async function POST(request: Request) {
   const payload = await request.json().catch(() => null);
   const clinicId = payload?.clinic_id || process.env.DEFAULT_CLINIC_ID;
   const status = payload?.status || "active";
-  const supabaseBusyBlockId =
-    typeof payload?.busy_block_id === "string" && payload.busy_block_id.trim()
-      ? payload.busy_block_id.trim()
+  const appointmentId =
+    typeof payload?.appointment_id === "string" && payload.appointment_id.trim()
+      ? payload.appointment_id.trim()
+      : typeof payload?.busy_block_id === "string" && payload.busy_block_id.trim()
+        ? payload.busy_block_id.trim()
       : typeof payload?.supabase_busy_block_id === "string" && payload.supabase_busy_block_id.trim()
         ? payload.supabase_busy_block_id.trim()
       : null;
@@ -27,20 +29,20 @@ export async function POST(request: Request) {
   const supabase = createSupabaseAdminClient();
 
   if (status === "canceled") {
-    if (!supabaseBusyBlockId) {
+    if (!appointmentId) {
       return NextResponse.json(
-        { error: "busy_block_id es obligatorio para cancelar un bloqueo." },
+        { error: "appointment_id es obligatorio para cancelar un bloqueo." },
         { status: 400 }
       );
     }
 
-    let query = supabase.from("busy_blocks").delete().eq("clinic_id", clinicId);
+    const { error } = await supabase
+      .from("appointments")
+      .update({ status: "canceled" })
+      .eq("clinic_id", clinicId)
+      .eq("id", appointmentId)
+      .eq("entry_type", "internal_block");
 
-    if (supabaseBusyBlockId) {
-      query = query.eq("id", supabaseBusyBlockId);
-    }
-
-    const { error } = await query;
     if (error) {
       return NextResponse.json({ error: error.message || "Delete failed" }, { status: 400 });
     }
@@ -48,7 +50,8 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       deleted: true,
-      busy_block_id: supabaseBusyBlockId,
+      appointment_id: appointmentId,
+      busy_block_id: appointmentId,
     });
   }
 
@@ -66,7 +69,7 @@ export async function POST(request: Request) {
     clinicId,
     startAt: slot.startAt,
     endAt: slot.endAt,
-    excludeBusyBlockId: supabaseBusyBlockId || undefined,
+    excludeAppointmentId: appointmentId || undefined,
   });
 
   if (!availability.ok) {
@@ -75,33 +78,35 @@ export async function POST(request: Request) {
 
   const blockPayload = {
     clinic_id: clinicId,
+    entry_type: "internal_block",
+    title: payload?.reason || payload?.title || "No disponible",
     start_at: slot.startAt,
     end_at: slot.endAt,
-    reason: payload?.reason || payload?.title || "No disponible",
+    status: "scheduled",
+    notes: payload?.notes || payload?.reason || payload?.title || "No disponible",
+    source_channel: source === "staff" ? "staff" : "doctor_whatsapp",
+    created_by: source === "staff" ? "staff" : "doctor_whatsapp",
     created_at: payload?.created_at || new Date().toISOString(),
-    cal_block_group_id: typeof payload?.external_reference === "string" ? payload.external_reference : null,
   };
 
   let data: Record<string, any> | null = null;
   let error: { message?: string } | null = null;
 
-  if (supabaseBusyBlockId) {
+  if (appointmentId) {
     const result = await supabase
-      .from("busy_blocks")
+      .from("appointments")
       .update(blockPayload)
       .eq("clinic_id", clinicId)
-      .eq("id", supabaseBusyBlockId)
+      .eq("id", appointmentId)
+      .eq("entry_type", "internal_block")
       .select("id, start_at, end_at")
       .single();
     data = result.data;
     error = result.error;
   } else {
     const result = await supabase
-      .from("busy_blocks")
-      .insert({
-        ...blockPayload,
-        created_by_user_id: payload?.created_by_user_id || null,
-      })
+      .from("appointments")
+      .insert(blockPayload)
       .select("id, start_at, end_at")
       .single();
     data = result.data;
@@ -114,6 +119,7 @@ export async function POST(request: Request) {
 
   return NextResponse.json({
     ok: true,
+    appointment_id: data.id,
     busy_block_id: data.id,
     source,
   });

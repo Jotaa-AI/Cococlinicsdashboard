@@ -50,6 +50,7 @@ export interface Call {
 export interface Appointment {
   id: string;
   clinic_id: string;
+  entry_type: "lead_visit" | "internal_block";
   lead_id: string | null;
   lead_name: string | null;
   lead_phone: string | null;

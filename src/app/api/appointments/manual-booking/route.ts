@@ -76,13 +76,18 @@ export async function POST(request: Request) {
     }
 
     const { data, error } = await admin
-      .from("busy_blocks")
+      .from("appointments")
       .insert({
         clinic_id: profile.clinic_id,
+        entry_type: "internal_block",
+        title: safeTitle,
         start_at: slot.startAt,
         end_at: slot.endAt,
-        reason: safeTitle,
-        created_by_user_id: user.id,
+        status: "scheduled",
+        notes: notes || safeTitle,
+        source_channel: "staff",
+        created_by: "staff",
+        created_at: new Date().toISOString(),
       })
       .select("id")
       .single();
@@ -91,7 +96,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: error?.message || "No se pudo crear el bloqueo." }, { status: 400 });
     }
 
-    return NextResponse.json({ ok: true, busy_block_id: data.id });
+    return NextResponse.json({ ok: true, appointment_id: data.id, busy_block_id: data.id });
   }
 
   const leadName = typeof body?.lead_name === "string" ? body.lead_name.trim() : "";
@@ -140,6 +145,7 @@ export async function POST(request: Request) {
     .from("appointments")
     .insert({
       clinic_id: profile.clinic_id,
+      entry_type: "lead_visit",
       lead_id: lead.id,
       lead_name: leadName,
       lead_phone: leadPhone,

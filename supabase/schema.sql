@@ -35,6 +35,13 @@ END $$;
 
 DO $$
 BEGIN
+  CREATE TYPE appointment_entry_type AS ENUM ('lead_visit', 'internal_block');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
   CREATE TYPE user_role AS ENUM ('admin', 'staff');
 EXCEPTION
   WHEN duplicate_object THEN NULL;
@@ -120,6 +127,7 @@ create index if not exists calls_recording_url_idx on calls (clinic_id) where re
 create table if not exists appointments (
   id uuid primary key default gen_random_uuid(),
   clinic_id uuid not null references clinics(id) on delete cascade,
+  entry_type appointment_entry_type not null default 'lead_visit',
   lead_id uuid references leads(id) on delete set null,
   lead_name text,
   lead_phone text,
@@ -139,6 +147,7 @@ create table if not exists appointments (
 create index if not exists appointments_start_at_idx on appointments (start_at);
 create index if not exists appointments_status_idx on appointments (status);
 create index if not exists appointments_lead_phone_idx on appointments (clinic_id, lead_phone);
+create index if not exists appointments_entry_type_idx on appointments (clinic_id, entry_type, start_at);
 drop index if exists appointments_patient_phone_idx;
 
 create table if not exists busy_blocks (
@@ -230,6 +239,7 @@ begin
 end $$;
 
 alter table if exists appointments
+  add column if not exists entry_type appointment_entry_type not null default 'lead_visit',
   add column if not exists lead_name text,
   add column if not exists lead_phone text;
 
@@ -253,10 +263,13 @@ where
 
 update appointments
 set
+  entry_type = coalesce(entry_type, 'lead_visit'::appointment_entry_type),
   reminder_2d_status = coalesce(reminder_2d_status, 'no_enviado'::reminder_delivery_status),
   reminder_1d_status = coalesce(reminder_1d_status, 'no_enviado'::reminder_delivery_status),
   reminder_1h_status = coalesce(reminder_1h_status, 'no_enviado'::reminder_delivery_status)
 where
+  entry_type is null
+  or
   reminder_2d_status is null
   or reminder_1d_status is null
   or reminder_1h_status is null;
@@ -278,6 +291,40 @@ from leads l
 where a.clinic_id = l.clinic_id
   and a.lead_id = l.id
   and (a.lead_name is null or a.lead_phone is null);
+
+insert into appointments (
+  clinic_id,
+  entry_type,
+  title,
+  start_at,
+  end_at,
+  status,
+  notes,
+  source_channel,
+  created_by,
+  created_at
+)
+select
+  b.clinic_id,
+  'internal_block'::appointment_entry_type,
+  coalesce(nullif(trim(b.reason), ''), 'No disponible'),
+  b.start_at,
+  b.end_at,
+  'scheduled'::appointment_status,
+  b.reason,
+  'staff',
+  'system',
+  coalesce(b.created_at, now())
+from busy_blocks b
+where not exists (
+  select 1
+  from appointments a
+  where a.clinic_id = b.clinic_id
+    and a.entry_type = 'internal_block'
+    and a.start_at = b.start_at
+    and a.end_at = b.end_at
+    and coalesce(a.title, '') = coalesce(nullif(trim(b.reason), ''), 'No disponible')
+);
 
 create table if not exists system_state (
   id uuid primary key default gen_random_uuid(),
@@ -769,9 +816,10 @@ end;
 $$;
 
 -- Scheduling guardrails:
--- - fixed slots of 30 minutes
+-- - lead visits use fixed slots of 30 minutes
+-- - internal blocks can last multiple 30 minute slots
 -- - local clinic window from 09:00 to 19:00 (Europe/Madrid)
--- - no overlaps against appointments, busy blocks, or google busy cache
+-- - no overlaps against scheduled appointments
 create or replace function public.validate_schedule_slot()
 returns trigger
 language plpgsql
@@ -781,6 +829,7 @@ declare
   local_end timestamp;
   start_minutes int;
   end_minutes int;
+  duration_seconds int;
 begin
   if new.start_at is null or new.end_at is null then
     raise exception 'start_at and end_at are required';
@@ -791,9 +840,7 @@ begin
     raise exception 'Only minute precision is allowed for schedule slots';
   end if;
 
-  if extract(epoch from (new.end_at - new.start_at)) <> 1800 then
-    raise exception 'Every slot must be exactly 30 minutes';
-  end if;
+  duration_seconds := extract(epoch from (new.end_at - new.start_at));
 
   local_start := new.start_at at time zone 'Europe/Madrid';
   local_end := new.end_at at time zone 'Europe/Madrid';
@@ -807,6 +854,14 @@ begin
 
   if (start_minutes % 30) <> 0 or (end_minutes % 30) <> 0 then
     raise exception 'Only 30 minute blocks are allowed';
+  end if;
+
+  if coalesce(new.entry_type, 'lead_visit') = 'internal_block' then
+    if duration_seconds < 1800 or (duration_seconds % 1800) <> 0 then
+      raise exception 'Internal blocks must use 30 minute increments';
+    end if;
+  elsif duration_seconds <> 1800 then
+    raise exception 'Every lead visit slot must be exactly 30 minutes';
   end if;
 
   if start_minutes < 540 or end_minutes > 1140 then
@@ -828,26 +883,6 @@ begin
     raise exception 'Schedule conflict: overlapping appointment';
   end if;
 
-  if exists (
-    select 1
-    from busy_blocks b
-    where b.clinic_id = new.clinic_id
-      and (tg_table_name <> 'busy_blocks' or b.id <> new.id)
-      and tstzrange(b.start_at, b.end_at, '[)') && tstzrange(new.start_at, new.end_at, '[)')
-  ) then
-    raise exception 'Schedule conflict: overlapping busy block';
-  end if;
-
-  if exists (
-    select 1
-    from calendar_events c
-    where c.clinic_id = new.clinic_id
-      and coalesce(lower(c.status), 'confirmed') <> 'cancelled'
-      and tstzrange(c.start_at, c.end_at, '[)') && tstzrange(new.start_at, new.end_at, '[)')
-  ) then
-    raise exception 'Schedule conflict: overlapping Google Calendar event';
-  end if;
-
   return new;
 end;
 $$;
@@ -860,11 +895,6 @@ for each row
 execute function public.validate_schedule_slot();
 
 drop trigger if exists trg_validate_busy_blocks_schedule on busy_blocks;
-create trigger trg_validate_busy_blocks_schedule
-before insert or update of clinic_id, start_at, end_at
-on busy_blocks
-for each row
-execute function public.validate_schedule_slot();
 
 create or replace function public.populate_appointment_contact_fields()
 returns trigger

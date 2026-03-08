@@ -53,6 +53,7 @@ export async function POST(request: Request) {
       .from("appointments")
       .select("id, start_at, end_at, lead_id")
       .eq("clinic_id", clinicId)
+      .eq("entry_type", "lead_visit")
       .eq("lead_phone", normalizedPhone)
       .eq("status", "scheduled")
       .gte("start_at", now)

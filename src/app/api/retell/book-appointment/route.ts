@@ -138,6 +138,7 @@ export async function POST(request: Request) {
       .from("appointments")
       .insert({
         clinic_id: clinicId,
+        entry_type: "lead_visit",
         lead_id: leadId,
         lead_name: leadName || null,
         lead_phone: normalizedPhone || null,

@@ -34,7 +34,7 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: appointment, error: appointmentError } = await admin
     .from("appointments")
-    .select("id, clinic_id, lead_id, lead_name, lead_phone, title, start_at, end_at, status, notes")
+    .select("id, clinic_id, entry_type, lead_id, lead_name, lead_phone, title, start_at, end_at, status, notes")
     .eq("clinic_id", profile.clinic_id)
     .eq("id", body.appointment_id)
     .single();
@@ -52,32 +52,34 @@ export async function POST(request: Request) {
       ? body.reason.trim()
       : "Cancelada desde la agenda de la app";
 
-  const webhookResponse = await fetch(CANCEL_APPOINTMENT_WEBHOOK_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      action: "cancel_appointment_from_app",
-      appointment_id: appointment.id,
-      clinic_id: appointment.clinic_id,
-      lead_id: appointment.lead_id,
-      lead_name: appointment.lead_name,
-      lead_phone: appointment.lead_phone,
-      title: appointment.title,
-      start_at: appointment.start_at,
-      end_at: appointment.end_at,
-      reason,
-      canceled_by_user_id: user.id,
-      source_channel: "staff_app",
-    }),
-  }).catch(() => null);
+  if (appointment.entry_type !== "internal_block") {
+    const webhookResponse = await fetch(CANCEL_APPOINTMENT_WEBHOOK_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        action: "cancel_appointment_from_app",
+        appointment_id: appointment.id,
+        clinic_id: appointment.clinic_id,
+        lead_id: appointment.lead_id,
+        lead_name: appointment.lead_name,
+        lead_phone: appointment.lead_phone,
+        title: appointment.title,
+        start_at: appointment.start_at,
+        end_at: appointment.end_at,
+        reason,
+        canceled_by_user_id: user.id,
+        source_channel: "staff_app",
+      }),
+    }).catch(() => null);
 
-  if (!webhookResponse?.ok) {
-    return NextResponse.json(
-      { error: "No se pudo notificar la cancelacion al webhook de n8n." },
-      { status: 502 }
-    );
+    if (!webhookResponse?.ok) {
+      return NextResponse.json(
+        { error: "No se pudo notificar la cancelacion al webhook de n8n." },
+        { status: 502 }
+      );
+    }
   }
 
   const mergedNotes = [appointment.notes, reason].filter(Boolean).join(" | ");
