@@ -119,7 +119,7 @@ export function NewAppointmentButton() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        setError(payload?.error || "No se pudo enviar la cita a n8n.");
+        setError(payload?.error || "No se pudo crear la cita.");
         return;
       }
 

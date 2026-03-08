@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertWebhookSecret } from "@/lib/utils/webhook";
 import { validateSlotRange } from "@/lib/calendar/slot-rules";
-import { createGoogleCalendarEvent, deleteGoogleCalendarEvent, queryGoogleBusyRanges } from "@/lib/google/sync";
+import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
 
 interface RetellBookAppointmentBody {
@@ -38,19 +38,6 @@ function normalizeEsPhone(rawPhone: string) {
   return `+34${digits}`;
 }
 
-function overlapsBusy(
-  startAt: string,
-  endAt: string,
-  busy: {
-    start: Date;
-    end: Date;
-  }[]
-) {
-  const start = new Date(startAt);
-  const end = new Date(endAt);
-  return busy.some((block) => start < block.end && end > block.start);
-}
-
 export async function POST(request: Request) {
   if (!assertWebhookSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -78,23 +65,15 @@ export async function POST(request: Request) {
     }
 
     const admin = createSupabaseAdminClient();
-    const { connection, busy, selectedCalendarIds } = await queryGoogleBusyRanges({
+    const availability = await checkSlotAvailability({
+      supabase: admin,
       clinicId,
-      timeMin: slot.startAt,
-      timeMax: slot.endAt,
-      timeZone: "Europe/Madrid",
+      startAt: slot.startAt,
+      endAt: slot.endAt,
     });
 
-    if (!connection) {
-      return NextResponse.json({ error: "Google Calendar no conectado para esta clínica." }, { status: 404 });
-    }
-
-    if (!selectedCalendarIds.length) {
-      return NextResponse.json({ error: "No hay calendarios configurados para comprobar disponibilidad." }, { status: 400 });
-    }
-
-    if (overlapsBusy(slot.startAt, slot.endAt, busy)) {
-      return NextResponse.json({ error: "El hueco solicitado ya no está disponible." }, { status: 409 });
+    if (!availability.ok) {
+      return NextResponse.json({ error: availability.error || "El hueco solicitado ya no está disponible." }, { status: 409 });
     }
 
     const leadNameRaw = body?.lead_name || body?.nombre || body?.full_name || null;
@@ -154,24 +133,6 @@ export async function POST(request: Request) {
     const sourceChannel = body?.source_channel || "call_ai";
     const title = body?.title || (leadName ? `Valoracion gratuita · ${leadName}` : "Valoracion gratuita");
     const notes = body?.notes || (treatment ? `Interes: ${treatment}.` : "Cita creada desde Retell.");
-    const descriptionParts = [
-      notes,
-      leadName ? `Lead: ${leadName}` : null,
-      normalizedPhone ? `Telefono: ${normalizedPhone}` : null,
-      treatment ? `Tratamiento: ${treatment}` : null,
-    ].filter(Boolean);
-
-    const googleEvent = await createGoogleCalendarEvent({
-      clinicId,
-      startAt: slot.startAt,
-      endAt: slot.endAt,
-      summary: title,
-      description: descriptionParts.join("\n"),
-    });
-
-    if (!googleEvent.eventId) {
-      return NextResponse.json({ error: "No se pudo crear el evento en Google Calendar." }, { status: 500 });
-    }
 
     const { data: appointment, error: appointmentError } = await admin
       .from("appointments")
@@ -185,7 +146,6 @@ export async function POST(request: Request) {
         end_at: slot.endAt,
         status: "scheduled",
         notes,
-        gcal_event_id: googleEvent.eventId,
         source_channel: sourceChannel,
         created_by: "agent",
         created_at: new Date().toISOString(),
@@ -194,12 +154,6 @@ export async function POST(request: Request) {
       .single();
 
     if (appointmentError || !appointment) {
-      await deleteGoogleCalendarEvent({
-        clinicId,
-        eventId: googleEvent.eventId,
-        calendarId: googleEvent.calendarId,
-      }).catch(() => null);
-
       return NextResponse.json({ error: appointmentError?.message || "No se pudo crear la cita." }, { status: 400 });
     }
 
@@ -215,7 +169,6 @@ export async function POST(request: Request) {
         meta: {
           appointment_id: appointment.id,
           source_channel: sourceChannel,
-          gcal_event_id: googleEvent.eventId,
         },
       }).catch(() => null);
     }
@@ -225,7 +178,6 @@ export async function POST(request: Request) {
       clinic_id: clinicId,
       lead_id: leadId,
       appointment_id: appointment.id,
-      gcal_event_id: googleEvent.eventId,
       start_at: slot.startAt,
       end_at: slot.endAt,
     });

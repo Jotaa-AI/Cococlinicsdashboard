@@ -12,17 +12,30 @@ interface AvailabilityResult {
   error?: string;
 }
 
-export async function checkSlotAvailability(input: CheckAvailabilityInput): Promise<AvailabilityResult> {
+export interface OccupiedRange {
+  start: Date;
+  end: Date;
+  source: "appointment" | "busy_block";
+  id: string;
+}
+
+export async function getOccupiedRanges(input: {
+  supabase: any;
+  clinicId: string;
+  startAt: string;
+  endAt: string;
+  excludeAppointmentId?: string;
+  excludeBusyBlockId?: string;
+}): Promise<{ ok: boolean; error?: string; ranges?: OccupiedRange[] }> {
   const { supabase, clinicId, startAt, endAt, excludeAppointmentId, excludeBusyBlockId } = input;
 
   let appointmentQuery = supabase
     .from("appointments")
-    .select("id")
+    .select("id, start_at, end_at")
     .eq("clinic_id", clinicId)
     .eq("status", "scheduled")
     .lt("start_at", endAt)
-    .gt("end_at", startAt)
-    .limit(1);
+    .gt("end_at", startAt);
 
   if (excludeAppointmentId) {
     appointmentQuery = appointmentQuery.neq("id", excludeAppointmentId);
@@ -32,17 +45,13 @@ export async function checkSlotAvailability(input: CheckAvailabilityInput): Prom
   if (appointmentError) {
     return { ok: false, error: appointmentError.message };
   }
-  if (conflictingAppointments && conflictingAppointments.length > 0) {
-    return { ok: false, error: "Ese bloque ya esta ocupado por otra cita." };
-  }
 
   let blockQuery = supabase
     .from("busy_blocks")
-    .select("id")
+    .select("id, start_at, end_at")
     .eq("clinic_id", clinicId)
     .lt("start_at", endAt)
-    .gt("end_at", startAt)
-    .limit(1);
+    .gt("end_at", startAt);
 
   if (excludeBusyBlockId) {
     blockQuery = blockQuery.neq("id", excludeBusyBlockId);
@@ -52,30 +61,44 @@ export async function checkSlotAvailability(input: CheckAvailabilityInput): Prom
   if (blockError) {
     return { ok: false, error: blockError.message };
   }
-  if (conflictingBlocks && conflictingBlocks.length > 0) {
+
+  const appointmentRanges = ((conflictingAppointments || []) as Array<{ id: string; start_at: string; end_at: string }>)
+    .map((item) => ({
+      id: item.id,
+      source: "appointment" as const,
+      start: new Date(item.start_at),
+      end: new Date(item.end_at),
+    }))
+    .filter((item) => !Number.isNaN(item.start.getTime()) && !Number.isNaN(item.end.getTime()));
+
+  const blockRanges = ((conflictingBlocks || []) as Array<{ id: string; start_at: string; end_at: string }>)
+    .map((item) => ({
+      id: item.id,
+      source: "busy_block" as const,
+      start: new Date(item.start_at),
+      end: new Date(item.end_at),
+    }))
+    .filter((item) => !Number.isNaN(item.start.getTime()) && !Number.isNaN(item.end.getTime()));
+
+  return { ok: true, ranges: [...appointmentRanges, ...blockRanges] };
+}
+
+export async function checkSlotAvailability(input: CheckAvailabilityInput): Promise<AvailabilityResult> {
+  const occupied = await getOccupiedRanges(input);
+
+  if (!occupied.ok) {
+    return { ok: false, error: occupied.error };
+  }
+
+  const conflictingAppointment = occupied.ranges?.find((item) => item.source === "appointment");
+  if (conflictingAppointment) {
+    return { ok: false, error: "Ese bloque ya esta ocupado por otra cita." };
+  }
+
+  const conflictingBlock = occupied.ranges?.find((item) => item.source === "busy_block");
+  if (conflictingBlock) {
     return { ok: false, error: "Ese bloque coincide con un bloqueo interno." };
-  }
-
-  const { data: googleEvents, error: googleError } = await supabase
-    .from("calendar_events")
-    .select("id, status")
-    .eq("clinic_id", clinicId)
-    .lt("start_at", endAt)
-    .gt("end_at", startAt)
-    .limit(20);
-
-  if (googleError) {
-    return { ok: false, error: googleError.message };
-  }
-
-  const conflictingGoogleEvent = (googleEvents || []).find((event: { status: string | null }) => {
-    return (event.status || "confirmed").toLowerCase() !== "cancelled";
-  });
-
-  if (conflictingGoogleEvent) {
-    return { ok: false, error: "Ese horario ya aparece ocupado en Google Calendar." };
   }
 
   return { ok: true };
 }
-

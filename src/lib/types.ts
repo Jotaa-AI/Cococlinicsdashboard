@@ -62,8 +62,8 @@ export interface Appointment {
   reminder_1h_status: "no_enviado" | "enviado";
   notes: string | null;
   gcal_event_id: string | null;
-  source_channel: "call_ai" | "whatsapp_ai" | "staff";
-  created_by: "agent" | "staff";
+  source_channel: "call_ai" | "whatsapp_ai" | "staff" | "doctor_whatsapp";
+  created_by: "agent" | "staff" | "doctor_whatsapp" | "system";
   created_at: string;
 }
 

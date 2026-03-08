@@ -47,19 +47,12 @@ export function NewBusyBlockButton() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function extractCalError(payload: any) {
-    const details =
-      payload?.cal_error?.error?.message ||
-      payload?.cal_error?.message ||
-      payload?.details?.error?.message ||
-      payload?.details?.message ||
-      null;
-    const failedSlot =
-      typeof payload?.failed_slot_index === "number"
-        ? ` (slot ${payload.failed_slot_index + 1})`
-        : "";
-    if (details) return `${payload?.error || "Error de Cal.com"}${failedSlot}: ${details}`;
-    return payload?.error || "No se pudo enviar el bloqueo a Cal.com.";
+  function extractRequestError(payload: any) {
+    const details = payload?.details?.error?.message || payload?.details?.message || payload?.details || null;
+    if (typeof details === "string" && details.trim()) {
+      return `${payload?.error || "Error"}: ${details}`;
+    }
+    return payload?.error || "No se pudo crear el bloqueo.";
   }
 
   const resetForm = () => {
@@ -120,7 +113,7 @@ export function NewBusyBlockButton() {
 
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        setError(extractCalError(payload));
+        setError(extractRequestError(payload));
         return;
       }
 

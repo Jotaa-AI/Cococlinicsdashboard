@@ -1,14 +1,14 @@
 # Coco Clinics Dashboard
 
-Dashboard interno para clínica estética con Next.js, Supabase y sincronización con Google Calendar.
+Dashboard interno para clínica estética con Next.js y Supabase. La agenda operativa vive en Supabase; n8n y Retell escriben sobre Supabase mediante endpoints y webhooks de la app.
 
 ## Requisitos
 - Node.js 20+
 - Proyecto en Supabase (Postgres + Auth + Realtime)
-- Credenciales OAuth 2.0 de Google Calendar
+- n8n para automatizaciones opcionales (Retell, WhatsApp de doctora, recordatorios)
 
 ## Variables de entorno
-Crea `.env.local`:
+Crea `/Users/jotajimenez/PROYECTOS/Vibe Coding/Codex/Dashboard Coco Clinics/.env.local` con:
 
 ```bash
 NEXT_PUBLIC_BASE_URL=http://localhost:3000
@@ -16,75 +16,36 @@ NEXT_PUBLIC_SUPABASE_URL=...
 NEXT_PUBLIC_SUPABASE_ANON_KEY=...
 SUPABASE_SERVICE_ROLE_KEY=...
 DEFAULT_CLINIC_ID=... # UUID de la clínica
-WEBHOOK_SECRET=... # shared secret para n8n
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_REDIRECT_URI=http://localhost:3000/api/gcal/callback
-GOOGLE_DEFAULT_CALENDAR_ID=primary
-GOOGLE_TOKEN_ENCRYPTION_KEY=... # base64 32 bytes
-NEXT_PUBLIC_GOOGLE_CALENDAR_ID=... # opcional, si no se usa GOOGLE_DEFAULT_CALENDAR_ID/primary
-NEXT_PUBLIC_GOOGLE_CALENDAR_TIMEZONE=Europe/Madrid
-NEXT_PUBLIC_GOOGLE_CALENDAR_EMBED_URL=... # opcional override iframe
-NEXT_PUBLIC_GOOGLE_CALENDAR_EDIT_URL=... # opcional override abrir en pestaña nueva
+WEBHOOK_SECRET=... # secreto compartido para n8n / Retell / webhooks
 NEXT_PUBLIC_CALL_COST_PER_MIN=1.5 # opcional
-NEXT_PUBLIC_GCAL_SYNC_INTERVAL_SEC=120 # opcional (sync automático)
-```
-
-Para generar `GOOGLE_TOKEN_ENCRYPTION_KEY`:
-
-```bash
-node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
 
 ## Base de datos
-Ejecuta el SQL en `supabase/schema.sql` en tu proyecto Supabase. Reemplaza el `user_id` del seed por tu usuario real.
+Ejecuta `/Users/jotajimenez/PROYECTOS/Vibe Coding/Codex/Dashboard Coco Clinics/supabase/schema.sql` en tu proyecto Supabase. Sustituye el `user_id` del seed por tu usuario real.
 
-Para activar la agenda en bloques de 30 minutos (09:00-19:00) con bloqueo de solapes:
+Migraciones útiles:
+- `/Users/jotajimenez/PROYECTOS/Vibe Coding/Codex/Dashboard Coco Clinics/supabase/migrations/20260208_schedule_slots.sql`
+  - activa bloques de 30 minutos, horario L-V 09:00-19:00 y validación de solapes.
+- `/Users/jotajimenez/PROYECTOS/Vibe Coding/Codex/Dashboard Coco Clinics/supabase/migrations/20260214_lead_journey_pipeline.sql`
+  - journey completo de llamadas IA y pipeline.
+- `/Users/jotajimenez/PROYECTOS/Vibe Coding/Codex/Dashboard Coco Clinics/supabase/migrations/20260214_agent_runtime_controls.sql`
+  - pausa operativa de agentes y human-in-the-loop.
+- `/Users/jotajimenez/PROYECTOS/Vibe Coding/Codex/Dashboard Coco Clinics/supabase/migrations/20260216_appointments_contact_fields.sql`
+  - añade `appointments.lead_name` y `appointments.lead_phone`.
 
-- abre `supabase/migrations/20260208_schedule_slots.sql`
-- copia su contenido
-- pégalo y ejecútalo en Supabase SQL Editor
-
-Para activar el journey completo de llamadas IA + escalado a WhatsApp:
-
-- abre `supabase/migrations/20260214_lead_journey_pipeline.sql`
-- copia su contenido
-- pégalo y ejecútalo en Supabase SQL Editor
-
-Para activar el control operativo de agentes (pausa llamadas/WhatsApp + bloqueo por lead):
-
-- abre `supabase/migrations/20260214_agent_runtime_controls.sql`
-- copia su contenido
-- pégalo y ejecútalo en Supabase SQL Editor
-
-Para guardar nombre y teléfono también dentro de `appointments`:
-
-- abre `supabase/migrations/20260216_appointments_contact_fields.sql`
-- copia su contenido
-- pégalo y ejecútalo en Supabase SQL Editor
-- esta migración deja los campos finales como `appointments.lead_name` y `appointments.lead_phone`
-
-Para habilitar selección de múltiples calendarios Google por clínica:
-
-- abre `supabase/migrations/20260307_gcal_selected_calendars.sql`
-- copia su contenido
-- pégalo y ejecútalo en Supabase SQL Editor
-
-RPCs clave para n8n:
-
+RPCs disponibles para n8n:
 - `rpc_find_nearest_slots(p_clinic_id, p_requested_start, p_window_hours, p_limit, p_timezone)`
 - `rpc_book_appointment_slot(p_clinic_id, p_lead_id, p_start_at, p_title, p_notes, p_created_by, p_idempotency_key, p_source)`
 - `rpc_transition_lead_stage(p_clinic_id, p_lead_id, p_to_stage_key, p_reason, p_actor_type, p_actor_id, p_meta)`
 
 Comprobaciones útiles para n8n:
 
-- Estado global de agentes:
 ```sql
 select calls_agent_active, whatsapp_agent_active, hitl_mode_active
 from agent_runtime_controls
 where clinic_id = 'TU_CLINIC_ID';
 ```
-- Bloqueo de WhatsApp por lead:
+
 ```sql
 select whatsapp_blocked
 from leads
@@ -102,8 +63,24 @@ npm install
 npm run dev
 ```
 
-## Webhooks (n8n)
-Todos los endpoints exigen header `X-WEBHOOK-SECRET`.
+## Agenda operativa
+La agenda de la app (`/calendar`) lee directamente estas tablas de Supabase:
+- `appointments`
+- `busy_blocks`
+
+La app permite:
+- crear citas manuales
+- bloquear tramos manualmente
+- ver agenda en calendario mensual o semanal
+
+Reglas de agenda:
+- lunes a viernes
+- 09:00 a 19:00
+- bloques de 30 minutos
+- sin solapes entre citas y bloqueos activos
+
+## Webhooks para n8n
+Todos los endpoints exigen `X-WEBHOOK-SECRET` o `Authorization: Bearer <WEBHOOK_SECRET>`.
 
 ### Lead created
 ```bash
@@ -145,45 +122,112 @@ curl -X POST http://localhost:3000/api/webhooks/call_ended \
   }'
 ```
 
-### Appointment created
+### Appointment created or updated
+n8n puede usar este endpoint para crear o actualizar citas en Supabase.
+
 ```bash
 curl -X POST http://localhost:3000/api/webhooks/appointment_created \
   -H "Content-Type: application/json" \
   -H "X-WEBHOOK-SECRET: $WEBHOOK_SECRET" \
   -d '{
-    "lead_id": "UUID_DEL_LEAD",
-    "start_at": "2025-02-06T09:00:00Z",
-    "end_at": "2025-02-06T10:00:00Z",
-    "export_google": true
+    "appointment_id": "UUID_OPCIONAL",
+    "lead_name": "Paula Navarro",
+    "lead_phone": "+34600111222",
+    "title": "Valoración gratuita",
+    "treatment": "Firmeza facial",
+    "start_at": "2026-03-10T10:00:00Z",
+    "end_at": "2026-03-10T10:30:00Z",
+    "status": "scheduled",
+    "source_channel": "call_ai"
   }'
 ```
 
-## Google Calendar
-1. Crea credenciales OAuth 2.0 en Google Cloud Console.
-2. Configura `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` y `GOOGLE_REDIRECT_URI`.
-3. Inicia sesión en el dashboard y ve a `/calendar`.
-4. Pulsa “Conectar Google” para autorizar la cuenta de la doctora.
-5. La agenda se muestra embebida por iframe y puedes abrirla en pestaña nueva si el login no aparece dentro del iframe.
+### Busy block sync
+n8n puede crear, actualizar o cancelar bloqueos en Supabase.
 
-### Endpoint de disponibilidad para n8n/Retell
-`POST /api/gcal/availability` (requiere header `X-WEBHOOK-SECRET`):
-
+Crear o actualizar:
 ```bash
-curl -X POST http://localhost:3000/api/gcal/availability \
+curl -X POST http://localhost:3000/api/webhooks/busy_block_sync \
   -H "Content-Type: application/json" \
   -H "X-WEBHOOK-SECRET: $WEBHOOK_SECRET" \
   -d '{
-    "clinic_id": "TU_CLINIC_ID",
-    "time_min": "2026-03-05T08:00:00Z",
-    "time_max": "2026-03-05T20:00:00Z",
-    "time_zone": "Europe/Madrid"
+    "busy_block_id": "UUID_OPCIONAL",
+    "start_at": "2026-03-10T09:00:00Z",
+    "end_at": "2026-03-10T11:00:00Z",
+    "reason": "Bloqueo doctora",
+    "status": "active",
+    "source": "doctor_whatsapp",
+    "external_reference": "doctor-whatsapp-20260310-0900"
   }'
 ```
+
+Cancelar:
+```bash
+curl -X POST http://localhost:3000/api/webhooks/busy_block_sync \
+  -H "Content-Type: application/json" \
+  -H "X-WEBHOOK-SECRET: $WEBHOOK_SECRET" \
+  -d '{
+    "busy_block_id": "UUID_DEL_BLOQUEO",
+    "status": "canceled"
+  }'
+```
+
+## Endpoints directos para Retell
+Si prefieres saltarte n8n para la reserva síncrona, la app expone estos endpoints:
+
+### Buscar disponibilidad
+```text
+POST https://TU_DOMINIO/api/retell/check-availability
+```
+
+Body:
+```json
+{
+  "appointment_requested_ts": "2026-03-10T11:00:00+01:00",
+  "time_zone": "Europe/Madrid"
+}
+```
+
+### Agendar cita
+```text
+POST https://TU_DOMINIO/api/retell/book-appointment
+```
+
+Body:
+```json
+{
+  "start_at": "2026-03-10T11:00:00+01:00",
+  "lead_name": "Paula Navarro",
+  "lead_phone": "+34600111222",
+  "treatment": "Radiofrecuencia facial",
+  "notes": "Primera valoración gratuita",
+  "source_channel": "call_ai"
+}
+```
+
+### Cancelar próxima cita futura por teléfono
+```text
+POST https://TU_DOMINIO/api/retell/cancel-appointment
+```
+
+Body:
+```json
+{
+  "lead_phone": "+34600111222",
+  "reason": "El paciente solicita cancelar la cita"
+}
+```
+
+## Operativa recomendada con n8n
+- Retell puede consultar y reservar directo contra la app, o bien pasar por n8n si necesitas lógica adicional.
+- El agente de WhatsApp de la doctora debería escribir bloqueos y cancelaciones en Supabase usando los webhooks anteriores.
+- La app solo lee Supabase, por lo que dashboard, pipeline, inbound y reporting usan una única fuente de verdad.
 
 ## Seed (opcional)
 ```bash
 npm run seed
 ```
 
-> Nota: el seed requiere `DEFAULT_CLINIC_ID` y `SUPABASE_SERVICE_ROLE_KEY`.
-> `npm run seed` limpia primero datos demo previos (`--reset-demo`) y luego inserta un dataset amplio para dashboard, calls, pipeline y agenda.
+Notas:
+- el seed requiere `DEFAULT_CLINIC_ID` y `SUPABASE_SERVICE_ROLE_KEY`
+- `npm run seed` limpia primero datos demo previos (`--reset-demo`) y luego inserta dataset de ejemplo para dashboard, calls, pipeline y agenda

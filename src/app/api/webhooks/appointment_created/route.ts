@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { assertWebhookSecret } from "@/lib/utils/webhook";
-import { exportAppointmentToGoogle } from "@/lib/google/sync";
-import { validateSlotRange } from "@/lib/calendar/slot-rules";
+import { SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
 
@@ -108,12 +107,18 @@ export async function POST(request: Request) {
     appointmentLeadPhone = appointmentLeadPhone || lead?.phone || null;
   }
 
+  const appointmentId =
+    typeof payload.appointment_id === "string" && payload.appointment_id.trim()
+      ? payload.appointment_id.trim()
+      : null;
+
   if (appointmentStatus === "scheduled") {
     const availability = await checkSlotAvailability({
       supabase,
       clinicId,
       startAt: slot.startAt,
       endAt: slot.endAt,
+      excludeAppointmentId: appointmentId || undefined,
     });
 
     if (!availability.ok) {
@@ -121,34 +126,45 @@ export async function POST(request: Request) {
     }
   }
 
-  const { data: appointment, error } = await supabase
-    .from("appointments")
-    .insert({
-      clinic_id: clinicId,
-      lead_id: leadId,
-      lead_name: appointmentLeadName || null,
-      lead_phone: appointmentLeadPhone || null,
-      title: payload.title || "Cita Coco Clinics",
-      start_at: slot.startAt,
-      end_at: slot.endAt,
-      status: appointmentStatus,
-      notes: payload.notes || null,
-      source_channel: sourceChannel,
-      created_by: payload.created_by || "agent",
-      created_at: new Date().toISOString(),
-    })
-    .select("*")
-    .single();
+  const appointmentPayload = {
+    clinic_id: clinicId,
+    lead_id: leadId,
+    lead_name: appointmentLeadName || null,
+    lead_phone: appointmentLeadPhone || null,
+    title: payload.title || "Cita Coco Clinics",
+    start_at: slot.startAt,
+    end_at: slot.endAt,
+    status: appointmentStatus,
+    notes: payload.notes || null,
+    source_channel: sourceChannel,
+    created_by: payload.created_by || "agent",
+    created_at: payload.created_at || new Date().toISOString(),
+  };
+
+  let appointment: Record<string, any> | null = null;
+  let error: { message?: string } | null = null;
+
+  if (appointmentId) {
+    const result = await supabase
+      .from("appointments")
+      .update(appointmentPayload)
+      .eq("id", appointmentId)
+      .select("*")
+      .single();
+    appointment = result.data;
+    error = result.error;
+  } else {
+    const result = await supabase
+      .from("appointments")
+      .insert(appointmentPayload)
+      .select("*")
+      .single();
+    appointment = result.data;
+    error = result.error;
+  }
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "Insert failed" }, { status: 400 });
-  }
-
-  if (payload.export_google) {
-    const gcalEventId = await exportAppointmentToGoogle(appointment, clinicId);
-    if (gcalEventId) {
-      await supabase.from("appointments").update({ gcal_event_id: gcalEventId }).eq("id", appointment.id);
-    }
   }
 
   if (leadId && (appointmentStatus === "scheduled" || appointmentStatus === "done")) {
@@ -173,5 +189,9 @@ export async function POST(request: Request) {
       .eq("id", leadId);
   }
 
-  return NextResponse.json({ ok: true, appointment_id: appointment.id });
+  return NextResponse.json({
+    ok: true,
+    appointment_id: appointment.id,
+    slot_minutes: SLOT_MINUTES,
+  });
 }

@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
-import { exportAppointmentToGoogle } from "@/lib/google/sync";
 import { validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 
@@ -74,11 +73,6 @@ export async function POST(request: Request) {
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "Update failed" }, { status: 400 });
-  }
-
-  const gcalEventId = await exportAppointmentToGoogle(appointment, profile.clinic_id);
-  if (gcalEventId && !appointment.gcal_event_id) {
-    await admin.from("appointments").update({ gcal_event_id: gcalEventId }).eq("id", appointment.id);
   }
 
   return NextResponse.json({ ok: true });

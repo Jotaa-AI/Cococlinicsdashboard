@@ -1,18 +1,14 @@
 import { NextResponse } from "next/server";
 import { assertWebhookSecret } from "@/lib/utils/webhook";
 import { SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
-import { queryGoogleBusyRanges } from "@/lib/google/sync";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { getOccupiedRanges, type OccupiedRange } from "@/lib/calendar/availability";
 
 interface CheckAvailabilityBody {
   clinic_id?: string;
   appointment_requested_ts?: string;
   appointment_available_ts?: string;
   time_zone?: string;
-}
-
-interface BusyRange {
-  start: Date;
-  end: Date;
 }
 
 const MAX_SUGGESTIONS = 3;
@@ -61,7 +57,7 @@ function isCandidateStart(date: Date, timeZone: string) {
   return total >= 9 * 60 && total <= 18 * 60 + 30;
 }
 
-function overlapsBusy(start: Date, end: Date, busy: BusyRange[]) {
+function overlapsBusy(start: Date, end: Date, busy: OccupiedRange[]) {
   return busy.some((block) => start < block.end && end > block.start);
 }
 
@@ -148,26 +144,19 @@ export async function POST(request: Request) {
 
     const searchOrigin = roundUpToNextSlot(new Date(Math.max(requestedDate.getTime(), now.getTime())));
     const scanEnd = new Date(searchOrigin.getTime() + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000);
-    const { connection, busy, selectedCalendarIds } = await queryGoogleBusyRanges({
+    const admin = createSupabaseAdminClient();
+    const occupied = await getOccupiedRanges({
+      supabase: admin,
       clinicId,
-      timeMin: searchOrigin.toISOString(),
-      timeMax: scanEnd.toISOString(),
-      timeZone,
+      startAt: searchOrigin.toISOString(),
+      endAt: scanEnd.toISOString(),
     });
 
-    if (!connection) {
-      return NextResponse.json(
-        { ok: false, error: "No Google Calendar connection for clinic.", available: false, suggestions: [] },
-        { status: 404 }
-      );
-    }
-    if (!selectedCalendarIds.length) {
-      return NextResponse.json(
-        { ok: false, error: "No selected calendars for clinic.", available: false, suggestions: [] },
-        { status: 400 }
-      );
+    if (!occupied.ok) {
+      return NextResponse.json({ ok: false, error: occupied.error || "No se pudo consultar la agenda." }, { status: 500 });
     }
 
+    const busy = occupied.ranges || [];
     const requestedInFuture = requestedDate.getTime() >= now.getTime();
     const requestedBlocked = overlapsBusy(requestedDate, requestedEnd, busy);
     const requestedAvailable = requestedValidation.ok && requestedInFuture && !requestedBlocked;
@@ -176,7 +165,6 @@ export async function POST(request: Request) {
       return NextResponse.json({
         ok: true,
         clinic_id: clinicId,
-        calendar_ids: selectedCalendarIds,
         time_zone: timeZone,
         requested_ts: requestedDate.toISOString(),
         available: true,
@@ -205,7 +193,6 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       clinic_id: clinicId,
-      calendar_ids: selectedCalendarIds,
       time_zone: timeZone,
       requested_ts: requestedDate.toISOString(),
       available: false,
