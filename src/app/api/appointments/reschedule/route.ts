@@ -4,6 +4,21 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 
+function normalizeEsPhone(rawPhone: string) {
+  const trimmed = rawPhone.trim();
+  if (!trimmed) return null;
+
+  let digits = trimmed.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("34")) digits = digits.slice(2);
+
+  if (!/^\d{9}$/.test(digits)) {
+    return null;
+  }
+
+  return `+34${digits}`;
+}
+
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
   const {
@@ -39,6 +54,28 @@ export async function POST(request: Request) {
   }
 
   const admin = createSupabaseAdminClient();
+  const leadName = typeof body.lead_name === "string" ? body.lead_name.trim() : "";
+  const leadPhoneRaw = typeof body.lead_phone === "string" ? body.lead_phone : "";
+  const leadPhone = leadPhoneRaw ? normalizeEsPhone(leadPhoneRaw) : null;
+
+  if ((leadName && !leadPhone) || (!leadName && leadPhoneRaw)) {
+    return NextResponse.json(
+      { error: "Nombre y teléfono deben enviarse juntos y con formato +34XXXXXXXXX." },
+      { status: 400 }
+    );
+  }
+
+  const { data: existingAppointment, error: existingAppointmentError } = await admin
+    .from("appointments")
+    .select("id, lead_id")
+    .eq("clinic_id", profile.clinic_id)
+    .eq("id", body.appointment_id)
+    .single();
+
+  if (existingAppointmentError || !existingAppointment) {
+    return NextResponse.json({ error: "No se encontro la cita a modificar." }, { status: 404 });
+  }
+
   const availability = await checkSlotAvailability({
     supabase: admin,
     clinicId: profile.clinic_id,
@@ -64,6 +101,11 @@ export async function POST(request: Request) {
     updatePayload.notes = body.notes ? String(body.notes) : null;
   }
 
+  if (leadName && leadPhone) {
+    updatePayload.lead_name = leadName;
+    updatePayload.lead_phone = leadPhone;
+  }
+
   const { data: appointment, error } = await admin
     .from("appointments")
     .update(updatePayload)
@@ -73,6 +115,18 @@ export async function POST(request: Request) {
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "Update failed" }, { status: 400 });
+  }
+
+  if (existingAppointment.lead_id && leadName && leadPhone) {
+    await admin
+      .from("leads")
+      .update({
+        full_name: leadName,
+        phone: leadPhone,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("clinic_id", profile.clinic_id)
+      .eq("id", existingAppointment.lead_id);
   }
 
   return NextResponse.json({ ok: true });

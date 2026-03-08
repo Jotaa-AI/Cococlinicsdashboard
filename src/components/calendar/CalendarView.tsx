@@ -28,14 +28,18 @@ type EntryType = "appointment" | "busy_block";
 
 interface CalendarEventItem extends EventInput {
   extendedProps: {
+    sourceId: string;
     entryType: EntryType;
     reason?: string | null;
     leadName?: string | null;
     leadPhone?: string | null;
+    formTitle?: string | null;
+    notes?: string | null;
   };
 }
 
 interface DraftEntryState {
+  sourceId?: string;
   type: EntryType;
   date: string;
   startTime: string;
@@ -142,8 +146,10 @@ export function CalendarView() {
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
   const [calendarTitle, setCalendarTitle] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogMode, setDialogMode] = useState<"create" | "edit">("create");
   const [draftEntry, setDraftEntry] = useState<DraftEntryState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [formNotice, setFormNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const buildEvents = useCallback((appointments: Appointment[], blocks: BusyBlock[]) => {
@@ -156,9 +162,12 @@ export function CalendarView() {
       borderColor: "#233b57",
       textColor: "#fff",
       extendedProps: {
+        sourceId: item.id,
         entryType: "appointment",
         leadName: item.lead_name,
         leadPhone: item.lead_phone,
+        formTitle: item.title,
+        notes: item.notes,
       },
     }));
 
@@ -171,8 +180,10 @@ export function CalendarView() {
       borderColor: "#d95f4f",
       textColor: "#fff",
       extendedProps: {
+        sourceId: item.id,
         entryType: "busy_block",
         reason: item.reason,
+        formTitle: item.reason,
       },
     }));
 
@@ -235,8 +246,10 @@ export function CalendarView() {
   const calendarPlugins = useMemo(() => [timeGridPlugin, dayGridPlugin, interactionPlugin], []);
 
   const openCreateDialog = useCallback((start: Date, end?: Date) => {
+    setDialogMode("create");
     setDraftEntry(getDraftFromDates(start, end));
     setFormError(null);
+    setFormNotice(null);
     setDialogOpen(true);
   }, []);
 
@@ -252,6 +265,28 @@ export function CalendarView() {
 
   const handleEventClick = useCallback((arg: EventClickArg) => {
     arg.jsEvent.preventDefault();
+    if (arg.event.extendedProps.entryType !== "appointment") {
+      return;
+    }
+
+    const start = arg.event.start;
+    const end = arg.event.end;
+    if (!start || !end) return;
+
+    setDialogMode("edit");
+    setDraftEntry({
+      sourceId: String(arg.event.extendedProps.sourceId),
+      type: "appointment",
+      date: toDateInputValue(start),
+      startTime: toTimeInputValue(start),
+      endTime: toTimeInputValue(end),
+      title: String(arg.event.extendedProps.formTitle || ""),
+      leadName: String(arg.event.extendedProps.leadName || ""),
+      leadPhone: String(arg.event.extendedProps.leadPhone || "+34"),
+    });
+    setFormError(null);
+    setFormNotice(null);
+    setDialogOpen(true);
   }, []);
 
   const handleDraftChange = useCallback(<K extends keyof DraftEntryState>(field: K, value: DraftEntryState[K]) => {
@@ -262,6 +297,7 @@ export function CalendarView() {
     setDialogOpen(false);
     setDraftEntry(null);
     setFormError(null);
+    setFormNotice(null);
     setLoading(false);
   }, []);
 
@@ -293,16 +329,6 @@ export function CalendarView() {
       return;
     }
 
-    const payload: Record<string, string> = {
-      entry_type: draftEntry.type,
-      title: draftEntry.title.trim(),
-      reason: draftEntry.title.trim(),
-      notes: draftEntry.title.trim(),
-      start_at: slot.startAt,
-      end_at: slot.endAt,
-      created_by: "staff",
-    };
-
     if (draftEntry.type === "appointment") {
       const normalizedPhone = normalizeEsPhone(draftEntry.leadPhone);
       if (!draftEntry.leadName.trim() || !normalizedPhone) {
@@ -310,10 +336,53 @@ export function CalendarView() {
         return;
       }
 
-      payload.lead_name = draftEntry.leadName.trim();
-      payload.lead_phone = normalizedPhone;
-      payload.title = draftEntry.title.trim();
+      const payload = {
+        title: draftEntry.title.trim(),
+        notes: draftEntry.title.trim(),
+        lead_name: draftEntry.leadName.trim(),
+        lead_phone: normalizedPhone,
+        start_at: slot.startAt,
+        end_at: slot.endAt,
+        ...(dialogMode === "edit" ? { appointment_id: draftEntry.sourceId } : { entry_type: "appointment", created_by: "staff" }),
+      };
+
+      try {
+        setLoading(true);
+        const response = await fetch(
+          dialogMode === "edit" ? "/api/appointments/reschedule" : "/api/appointments/manual-booking",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }
+        );
+
+        const responsePayload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          setFormError(responsePayload?.error || "No se pudo guardar el cambio en agenda.");
+          return;
+        }
+
+        resetDialog();
+        loadEvents();
+        return;
+      } catch {
+        setFormError("No se pudo guardar el cambio en agenda.");
+        return;
+      } finally {
+        setLoading(false);
+      }
     }
+
+    const payload = {
+      entry_type: "busy_block",
+      title: draftEntry.title.trim(),
+      reason: draftEntry.title.trim(),
+      notes: draftEntry.title.trim(),
+      start_at: slot.startAt,
+      end_at: slot.endAt,
+      created_by: "staff",
+    };
 
     try {
       setLoading(true);
@@ -323,9 +392,9 @@ export function CalendarView() {
         body: JSON.stringify(payload),
       });
 
+      const responsePayload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => ({}));
-        setFormError(errorPayload?.error || "No se pudo guardar el cambio en agenda.");
+        setFormError(responsePayload?.error || "No se pudo guardar el cambio en agenda.");
         return;
       }
 
@@ -336,7 +405,45 @@ export function CalendarView() {
     } finally {
       setLoading(false);
     }
-  }, [draftEntry, loadEvents, resetDialog]);
+  }, [dialogMode, draftEntry, loadEvents, resetDialog]);
+
+  const handleCancelAppointment = useCallback(async () => {
+    if (!draftEntry?.sourceId || dialogMode !== "edit" || draftEntry.type !== "appointment") {
+      return;
+    }
+
+    setFormError(null);
+    setFormNotice(null);
+
+    try {
+      setLoading(true);
+      const response = await fetch("/api/appointments/cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appointment_id: draftEntry.sourceId,
+          reason: `Cancelada desde la agenda de la app${draftEntry.title.trim() ? `: ${draftEntry.title.trim()}` : ""}`,
+        }),
+      });
+
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        setFormError(payload?.error || "No se pudo cancelar la cita.");
+        return;
+      }
+
+      if (payload?.warning) {
+        setFormNotice(payload.warning);
+      }
+
+      resetDialog();
+      loadEvents();
+    } catch {
+      setFormError("No se pudo cancelar la cita.");
+    } finally {
+      setLoading(false);
+    }
+  }, [dialogMode, draftEntry, loadEvents, resetDialog]);
 
   return (
     <div className="space-y-4">
@@ -428,7 +535,9 @@ export function CalendarView() {
       <Dialog open={dialogOpen} onOpenChange={(nextOpen) => (nextOpen ? setDialogOpen(true) : resetDialog())}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Nuevo elemento en agenda</DialogTitle>
+            <DialogTitle>
+              {dialogMode === "edit" ? "Editar cita" : "Nuevo elemento en agenda"}
+            </DialogTitle>
             <DialogDescription>
               Igual que en Google Calendar: define el tipo, el título y el tramo horario. Los horarios funcionan en intervalos de 30 minutos.
             </DialogDescription>
@@ -436,21 +545,23 @@ export function CalendarView() {
 
           {draftEntry ? (
             <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <div className="space-y-1.5 md:col-span-2">
-                <Label>Tipo</Label>
-                <Select
-                  value={draftEntry.type}
-                  onValueChange={(value: EntryType) => handleDraftChange("type", value)}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="appointment">Cita</SelectItem>
-                    <SelectItem value="busy_block">Bloqueo de horas</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {dialogMode === "create" ? (
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label>Tipo</Label>
+                  <Select
+                    value={draftEntry.type}
+                    onValueChange={(value: EntryType) => handleDraftChange("type", value)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="appointment">Cita</SelectItem>
+                      <SelectItem value="busy_block">Bloqueo de horas</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : null}
 
               <div className="space-y-1.5 md:col-span-2">
                 <Label htmlFor="calendar-entry-title">
@@ -550,13 +661,19 @@ export function CalendarView() {
               </div>
 
               {formError ? <p className="md:col-span-2 text-sm text-rose-600">{formError}</p> : null}
+              {formNotice ? <p className="md:col-span-2 text-sm text-amber-600">{formNotice}</p> : null}
 
               <div className="md:col-span-2 flex justify-end gap-2">
+                {dialogMode === "edit" && draftEntry.type === "appointment" ? (
+                  <Button type="button" variant="outline" onClick={handleCancelAppointment} disabled={loading}>
+                    {loading ? "Cancelando..." : "Cancelar cita"}
+                  </Button>
+                ) : null}
                 <Button type="button" variant="outline" onClick={resetDialog} disabled={loading}>
-                  Cancelar
+                  Cerrar
                 </Button>
                 <Button type="button" onClick={handleSave} disabled={loading}>
-                  {loading ? "Guardando..." : "Guardar"}
+                  {loading ? "Guardando..." : dialogMode === "edit" ? "Guardar cambios" : "Guardar"}
                 </Button>
               </div>
             </div>
