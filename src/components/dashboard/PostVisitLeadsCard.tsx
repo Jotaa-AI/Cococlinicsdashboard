@@ -63,7 +63,7 @@ export function PostVisitLeadsCard() {
       .from("appointments")
       .select("*")
       .eq("clinic_id", clinicId)
-      .eq("entry_type", "lead_visit")
+      .or("entry_type.eq.lead_visit,entry_type.is.null")
       .neq("status", "canceled")
       .lt("start_at", startOfTomorrowIso())
       .order("start_at", { ascending: true });

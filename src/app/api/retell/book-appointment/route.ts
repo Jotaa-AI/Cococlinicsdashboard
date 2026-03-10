@@ -4,6 +4,7 @@ import { assertWebhookSecret } from "@/lib/utils/webhook";
 import { validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
+import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
 
 interface RetellBookAppointmentBody {
   clinic_id?: string;
@@ -21,21 +22,6 @@ interface RetellBookAppointmentBody {
   notes?: string;
   title?: string;
   source_channel?: "call_ai" | "whatsapp_ai" | "staff";
-}
-
-function normalizeEsPhone(rawPhone: string) {
-  const trimmed = rawPhone.trim();
-  if (!trimmed) return null;
-
-  let digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.startsWith("34")) digits = digits.slice(2);
-
-  if (!/^\d{9}$/.test(digits)) {
-    return null;
-  }
-
-  return `+34${digits}`;
 }
 
 export async function POST(request: Request) {
@@ -90,48 +76,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Nombre y teléfono deben enviarse juntos." }, { status: 400 });
     }
 
-    let leadId = body?.lead_id || null;
+    let resolvedLead = {
+      leadId: body?.lead_id || null,
+      leadName,
+      leadPhone: normalizedPhone,
+    };
     const treatment = body?.treatment || body?.tratamiento || null;
 
-    if (!leadId && leadName && normalizedPhone) {
-      const { data: lead, error: leadError } = await admin
-        .from("leads")
-        .upsert(
-          {
-            clinic_id: clinicId,
-            full_name: leadName,
-            phone: normalizedPhone,
-            source: "retell",
-            treatment,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "clinic_id,phone" }
-        )
-        .select("id")
-        .single();
-
-      if (leadError || !lead?.id) {
-        return NextResponse.json({ error: leadError?.message || "No se pudo crear el lead." }, { status: 400 });
-      }
-
-      leadId = lead.id;
-    }
-
-    if (leadId && leadName && normalizedPhone) {
-      await admin
-        .from("leads")
-        .update({
-          full_name: leadName,
-          phone: normalizedPhone,
+    if (resolvedLead.leadId || (leadName && normalizedPhone)) {
+      try {
+        resolvedLead = await resolveLeadForAppointment({
+          supabase: admin,
+          clinicId,
+          leadId: resolvedLead.leadId,
+          leadName,
+          leadPhone: normalizedPhone,
           treatment,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("clinic_id", clinicId)
-        .eq("id", leadId);
+          source: "retell",
+        });
+      } catch (error: any) {
+        return NextResponse.json({ error: error?.message || "No se pudo crear el lead." }, { status: 400 });
+      }
     }
 
     const sourceChannel = body?.source_channel || "call_ai";
-    const title = body?.title || (leadName ? `Valoracion gratuita · ${leadName}` : "Valoracion gratuita");
+    const title =
+      body?.title || (resolvedLead.leadName ? `Valoracion gratuita · ${resolvedLead.leadName}` : "Valoracion gratuita");
     const notes = body?.notes || (treatment ? `Interes: ${treatment}.` : "Cita creada desde Retell.");
 
     const { data: appointment, error: appointmentError } = await admin
@@ -139,9 +109,9 @@ export async function POST(request: Request) {
       .insert({
         clinic_id: clinicId,
         entry_type: "lead_visit",
-        lead_id: leadId,
-        lead_name: leadName || null,
-        lead_phone: normalizedPhone || null,
+        lead_id: resolvedLead.leadId,
+        lead_name: resolvedLead.leadName,
+        lead_phone: resolvedLead.leadPhone,
         title,
         start_at: slot.startAt,
         end_at: slot.endAt,
@@ -158,11 +128,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: appointmentError?.message || "No se pudo crear la cita." }, { status: 400 });
     }
 
-    if (leadId) {
+    if (resolvedLead.leadId) {
       await transitionLeadStage({
         supabase: admin,
         clinicId,
-        leadId,
+        leadId: resolvedLead.leadId,
         toStageKey: "visit_scheduled",
         reason: "Cita agendada desde Retell",
         actorType: sourceChannel,
@@ -177,7 +147,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       ok: true,
       clinic_id: clinicId,
-      lead_id: leadId,
+      lead_id: resolvedLead.leadId,
       appointment_id: appointment.id,
       start_at: slot.startAt,
       end_at: slot.endAt,

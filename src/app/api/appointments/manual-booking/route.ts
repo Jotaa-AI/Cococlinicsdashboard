@@ -4,21 +4,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
-
-function normalizeEsPhone(rawPhone: string) {
-  const trimmed = rawPhone.trim();
-  if (!trimmed) return null;
-
-  let digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.startsWith("34")) digits = digits.slice(2);
-
-  if (!/^\d{9}$/.test(digits)) {
-    return null;
-  }
-
-  return `+34${digits}`;
-}
+import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -121,24 +107,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: availability.error }, { status: 409 });
   }
 
-  const { data: lead, error: leadError } = await admin
-    .from("leads")
-    .upsert(
-      {
-        clinic_id: profile.clinic_id,
-        full_name: leadName,
-        phone: leadPhone,
-        treatment: body.treatment || safeTitle,
-        source: "manual",
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "clinic_id,phone" }
-    )
-    .select("id")
-    .single();
+  let lead;
+  try {
+    lead = await resolveLeadForAppointment({
+      supabase: admin,
+      clinicId: profile.clinic_id,
+      leadName,
+      leadPhone,
+      treatment: body.treatment || safeTitle,
+      source: "manual",
+    });
+  } catch (error: any) {
+    return NextResponse.json({ error: error?.message || "No se pudo crear el lead." }, { status: 400 });
+  }
 
-  if (leadError || !lead?.id) {
-    return NextResponse.json({ error: leadError?.message || "No se pudo crear el lead." }, { status: 400 });
+  if (!lead?.leadId) {
+    return NextResponse.json({ error: "No se pudo crear el lead." }, { status: 400 });
   }
 
   const { data: appointment, error } = await admin
@@ -146,9 +130,9 @@ export async function POST(request: Request) {
     .insert({
       clinic_id: profile.clinic_id,
       entry_type: "lead_visit",
-      lead_id: lead.id,
-      lead_name: leadName,
-      lead_phone: leadPhone,
+      lead_id: lead.leadId,
+      lead_name: lead.leadName,
+      lead_phone: lead.leadPhone,
       title: safeTitle,
       start_at: slot.startAt,
       end_at: slot.endAt,
@@ -168,7 +152,7 @@ export async function POST(request: Request) {
   await transitionLeadStage({
     supabase: admin,
     clinicId: profile.clinic_id,
-    leadId: lead.id,
+      leadId: lead.leadId,
     toStageKey: "visit_scheduled",
     reason: "Cita creada manualmente desde agenda",
     actorType: "staff",

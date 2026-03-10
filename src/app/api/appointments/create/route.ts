@@ -4,21 +4,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
-
-function normalizeEsPhone(rawPhone: string) {
-  const trimmed = rawPhone.trim();
-  if (!trimmed) return null;
-
-  let digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.startsWith("34")) digits = digits.slice(2);
-
-  if (!/^\d{9}$/.test(digits)) {
-    return null;
-  }
-
-  return `+34${digits}`;
-}
+import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -77,41 +63,26 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nombre y teléfono deben enviarse juntos." }, { status: 400 });
   }
 
-  let leadId: string | null = body.lead_id || null;
-  if (!leadId && leadName && normalizedPhone) {
-    const { data: lead, error: leadError } = await admin
-      .from("leads")
-      .upsert(
-        {
-          clinic_id: profile.clinic_id,
-          full_name: leadName,
-          phone: normalizedPhone,
-          source: "manual",
-          treatment: body.treatment || null,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "clinic_id,phone" }
-      )
-      .select("id")
-      .single();
+  let resolvedLead = {
+    leadId: body.lead_id || null,
+    leadName: leadName || null,
+    leadPhone: normalizedPhone || null,
+  };
 
-    if (leadError || !lead?.id) {
-      return NextResponse.json({ error: leadError?.message || "No se pudo crear el lead." }, { status: 400 });
+  if (resolvedLead.leadId || (leadName && normalizedPhone)) {
+    try {
+      resolvedLead = await resolveLeadForAppointment({
+        supabase: admin,
+        clinicId: profile.clinic_id,
+        leadId: resolvedLead.leadId,
+        leadName,
+        leadPhone: normalizedPhone,
+        treatment: body.treatment || null,
+        source: "manual",
+      });
+    } catch (error: any) {
+      return NextResponse.json({ error: error?.message || "No se pudo crear el lead." }, { status: 400 });
     }
-
-    leadId = lead.id;
-  }
-
-  if (leadId && leadName && normalizedPhone) {
-    await admin
-      .from("leads")
-      .update({
-        full_name: leadName,
-        phone: normalizedPhone,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("clinic_id", profile.clinic_id)
-      .eq("id", leadId);
   }
 
   const availability = await checkSlotAvailability({
@@ -130,9 +101,9 @@ export async function POST(request: Request) {
     .insert({
       clinic_id: profile.clinic_id,
       entry_type: "lead_visit",
-      lead_id: leadId,
-      lead_name: leadName || null,
-      lead_phone: normalizedPhone || null,
+      lead_id: resolvedLead.leadId,
+      lead_name: resolvedLead.leadName,
+      lead_phone: resolvedLead.leadPhone,
       title: body.title || "Cita Coco Clinics",
       start_at: slot.startAt,
       end_at: slot.endAt,
@@ -149,11 +120,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: error?.message || "Insert failed" }, { status: 400 });
   }
 
-  if (leadId) {
+  if (resolvedLead.leadId) {
     await transitionLeadStage({
       supabase: admin,
       clinicId: profile.clinic_id,
-      leadId,
+      leadId: resolvedLead.leadId,
       toStageKey: "visit_scheduled",
       reason: "Cita creada desde agenda",
       actorType: "staff",

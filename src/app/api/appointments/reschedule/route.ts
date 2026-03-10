@@ -3,21 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
-
-function normalizeEsPhone(rawPhone: string) {
-  const trimmed = rawPhone.trim();
-  if (!trimmed) return null;
-
-  let digits = trimmed.replace(/\D/g, "");
-  if (digits.startsWith("00")) digits = digits.slice(2);
-  if (digits.startsWith("34")) digits = digits.slice(2);
-
-  if (!/^\d{9}$/.test(digits)) {
-    return null;
-  }
-
-  return `+34${digits}`;
-}
+import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -58,7 +44,7 @@ export async function POST(request: Request) {
 
   const { data: existingAppointment, error: existingAppointmentError } = await admin
     .from("appointments")
-    .select("id, lead_id, entry_type")
+    .select("id, lead_id, lead_name, lead_phone, entry_type")
     .eq("clinic_id", profile.clinic_id)
     .eq("id", body.appointment_id)
     .single();
@@ -103,9 +89,27 @@ export async function POST(request: Request) {
     updatePayload.notes = body.notes ? String(body.notes) : null;
   }
 
-  if (leadName && leadPhone) {
-    updatePayload.lead_name = leadName;
-    updatePayload.lead_phone = leadPhone;
+  const resolveLeadName = leadName || existingAppointment.lead_name || "";
+  const resolveLeadPhone = leadPhone || normalizeEsPhone(existingAppointment.lead_phone);
+
+  if (existingAppointment.entry_type !== "internal_block" && (existingAppointment.lead_id || (resolveLeadName && resolveLeadPhone))) {
+    let resolvedLead;
+    try {
+      resolvedLead = await resolveLeadForAppointment({
+        supabase: admin,
+        clinicId: profile.clinic_id,
+        leadId: existingAppointment.lead_id,
+        leadName: resolveLeadName,
+        leadPhone: resolveLeadPhone,
+        source: "manual",
+      });
+    } catch (error: any) {
+      return NextResponse.json({ error: error?.message || "No se pudo vincular el lead." }, { status: 400 });
+    }
+
+    updatePayload.lead_id = resolvedLead.leadId;
+    updatePayload.lead_name = resolvedLead.leadName;
+    updatePayload.lead_phone = resolvedLead.leadPhone;
   }
 
   const { data: appointment, error } = await admin
@@ -117,18 +121,6 @@ export async function POST(request: Request) {
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "Update failed" }, { status: 400 });
-  }
-
-  if (existingAppointment.lead_id && leadName && leadPhone) {
-    await admin
-      .from("leads")
-      .update({
-        full_name: leadName,
-        phone: leadPhone,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("clinic_id", profile.clinic_id)
-      .eq("id", existingAppointment.lead_id);
   }
 
   return NextResponse.json({ ok: true });
