@@ -19,6 +19,15 @@ interface UpdateLeadOutcomeResult {
   error?: string;
 }
 
+function extractMissingColumn(message?: string | null) {
+  if (!message) return null;
+  const quotedMatch = message.match(/'([^']+)' column/);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+  const relationMatch = message.match(/column \"([^\"]+)\" of relation/);
+  if (relationMatch?.[1]) return relationMatch[1];
+  return null;
+}
+
 export async function updateLeadOutcome(input: UpdateLeadOutcomeInput): Promise<UpdateLeadOutcomeResult> {
   const {
     supabase,
@@ -49,7 +58,7 @@ export async function updateLeadOutcome(input: UpdateLeadOutcomeInput): Promise<
   }
 
   const isClosed = toStageKey === "client_closed";
-  const updatePayload = {
+  const updatePayload: Record<string, any> = {
     converted_to_client: isClosed,
     converted_value_eur: isClosed ? convertedValueEur : null,
     converted_service_name: isClosed ? convertedServiceName : null,
@@ -58,13 +67,33 @@ export async function updateLeadOutcome(input: UpdateLeadOutcomeInput): Promise<
     updated_at: new Date().toISOString(),
   };
 
-  const { data: lead, error: leadError } = await supabase
-    .from("leads")
-    .update(updatePayload)
-    .eq("clinic_id", clinicId)
-    .eq("id", leadId)
-    .select("*")
-    .single();
+  let lead: Lead | null = null;
+  let leadError: any = null;
+
+  // Some environments can be behind on schema migrations.
+  // Retry removing unknown optional fields so critical values are still persisted.
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const { data, error } = await supabase
+      .from("leads")
+      .update(updatePayload)
+      .eq("clinic_id", clinicId)
+      .eq("id", leadId)
+      .select("*")
+      .single();
+
+    if (!error && data) {
+      lead = data as Lead;
+      leadError = null;
+      break;
+    }
+
+    leadError = error;
+    const missingColumn = extractMissingColumn(error?.message);
+    if (!missingColumn || !(missingColumn in updatePayload)) {
+      break;
+    }
+    delete updatePayload[missingColumn];
+  }
 
   if (leadError || !lead) {
     return { ok: false, error: leadError?.message || "No se pudo guardar el estado comercial del lead." };
