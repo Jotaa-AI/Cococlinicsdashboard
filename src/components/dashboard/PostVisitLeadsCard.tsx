@@ -16,6 +16,15 @@ interface PostVisitLeadRow {
   lead: Lead | null;
 }
 
+function normalizePhone(rawPhone?: string | null) {
+  if (!rawPhone) return null;
+  let digits = rawPhone.replace(/\D/g, "");
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("34")) digits = digits.slice(2);
+  if (!/^\d{9}$/.test(digits)) return null;
+  return `+34${digits}`;
+}
+
 function startOfTomorrowIso() {
   const now = new Date();
   now.setHours(24, 0, 0, 0);
@@ -63,11 +72,12 @@ export function PostVisitLeadsCard() {
 
     const firstVisitByLead = new Map<string, Appointment>();
     for (const appointment of orderedAppointments) {
-      if (appointment.lead_id) {
-        if (!firstVisitByLead.has(appointment.lead_id)) {
-          firstVisitByLead.set(appointment.lead_id, appointment);
-        }
-      }
+      const key =
+        appointment.lead_id ||
+        normalizePhone(appointment.lead_phone) ||
+        appointment.lead_name?.trim().toLowerCase() ||
+        appointment.id;
+      if (!firstVisitByLead.has(key)) firstVisitByLead.set(key, appointment);
     }
 
     const dedupedAppointments = [...firstVisitByLead.values()].sort(
@@ -75,24 +85,63 @@ export function PostVisitLeadsCard() {
     );
 
     const leadIds = Array.from(new Set(dedupedAppointments.map((item) => item.lead_id).filter(Boolean))) as string[];
+    const leadPhones = Array.from(
+      new Set(dedupedAppointments.map((item) => normalizePhone(item.lead_phone)).filter(Boolean))
+    ) as string[];
+    const leadNames = Array.from(
+      new Set(
+        dedupedAppointments
+          .filter((item) => !item.lead_id && !normalizePhone(item.lead_phone))
+          .map((item) => item.lead_name?.trim())
+          .filter(Boolean)
+      )
+    ) as string[];
     let leadMap = new Map<string, Lead>();
+    let leadPhoneMap = new Map<string, Lead>();
+    let leadNameMap = new Map<string, Lead>();
 
-    if (leadIds.length) {
-      const { data: leadsData } = await supabase
-        .from("leads")
-        .select("*")
-        .eq("clinic_id", clinicId)
-        .in("id", leadIds);
+    if (leadIds.length || leadPhones.length || leadNames.length) {
+      const [leadsByIdResult, leadsByPhoneResult, leadsByNameResult] = await Promise.all([
+        leadIds.length
+          ? supabase.from("leads").select("*").eq("clinic_id", clinicId).in("id", leadIds)
+          : Promise.resolve({ data: [] as Lead[] }),
+        leadPhones.length
+          ? supabase.from("leads").select("*").eq("clinic_id", clinicId).in("phone", leadPhones)
+          : Promise.resolve({ data: [] as Lead[] }),
+        leadNames.length
+          ? supabase.from("leads").select("*").eq("clinic_id", clinicId).in("full_name", leadNames)
+          : Promise.resolve({ data: [] as Lead[] }),
+      ]);
 
-      leadMap = new Map(((leadsData || []) as Lead[]).map((lead) => [lead.id, lead]));
+      leadMap = new Map(((leadsByIdResult.data || []) as Lead[]).map((lead) => [lead.id, lead]));
+      leadPhoneMap = new Map(
+        ((leadsByPhoneResult.data || []) as Lead[])
+          .map((lead) => [normalizePhone(lead.phone), lead] as const)
+          .filter((entry): entry is [string, Lead] => Boolean(entry[0]))
+      );
+      leadNameMap = new Map(
+        ((leadsByNameResult.data || []) as Lead[])
+          .map((lead) => [lead.full_name?.trim().toLowerCase(), lead] as const)
+          .filter((entry): entry is [string, Lead] => Boolean(entry[0]))
+      );
     }
 
     const nextRows = dedupedAppointments
-      .map((appointment) => ({
-        appointment,
-        lead: appointment.lead_id ? leadMap.get(appointment.lead_id) || null : null,
-      }))
-      .filter((row) => row.lead && row.lead.stage_key !== "client_closed" && !row.lead.converted_to_client) as PostVisitLeadRow[];
+      .map((appointment) => {
+        const normalizedPhone = normalizePhone(appointment.lead_phone);
+        const normalizedName = appointment.lead_name?.trim().toLowerCase() || null;
+        const lead =
+          (appointment.lead_id ? leadMap.get(appointment.lead_id) : null) ||
+          (normalizedPhone ? leadPhoneMap.get(normalizedPhone) : null) ||
+          (normalizedName ? leadNameMap.get(normalizedName) : null) ||
+          null;
+
+        return {
+          appointment,
+          lead,
+        };
+      })
+      .filter((row) => !row.lead || (row.lead.stage_key !== "client_closed" && !row.lead.converted_to_client)) as PostVisitLeadRow[];
 
     setRows(nextRows);
 
@@ -352,7 +401,12 @@ export function PostVisitLeadsCard() {
                           <p className="text-xs text-rose-600">{errorByLeadId[lead.id]}</p>
                         ) : null}
                       </div>
-                    ) : null}
+                    ) : (
+                      <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                        Esta cita no tiene un lead vinculado en Supabase. Revisa el teléfono o el lead asociado antes de
+                        marcar el cierre.
+                      </div>
+                    )}
                   </div>
                 );
               })}

@@ -14,7 +14,9 @@ interface KpiValues {
   leadsToday: number;
   leads7d: number;
   leads30d: number;
-  contactedRate: number;
+  callToAppointmentRate: number;
+  callsEndedMonth: number;
+  callsBookedMonth: number;
   appointments: number;
   noResponse: number;
   callCostTotal: number;
@@ -37,7 +39,9 @@ export function KpiGrid() {
     leadsToday: 0,
     leads7d: 0,
     leads30d: 0,
-    contactedRate: 0,
+    callToAppointmentRate: 0,
+    callsEndedMonth: 0,
+    callsBookedMonth: 0,
     appointments: 0,
     noResponse: 0,
     callCostTotal: 0,
@@ -77,7 +81,6 @@ export function KpiGrid() {
       leadsToday,
       leads7d,
       leads30d,
-      contacted,
       noResponse,
       appointments,
       endedCallsInMonth,
@@ -103,12 +106,6 @@ export function KpiGrid() {
         .from("leads")
         .select("id", { count: "exact", head: true })
         .eq("clinic_id", clinicId)
-        .in("status", ["contacted", "visit_scheduled"])
-        .gte("created_at", last30),
-      supabase
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
         .eq("status", "no_response")
         .gte("created_at", last30),
       supabase
@@ -120,7 +117,7 @@ export function KpiGrid() {
         .gte("start_at", new Date().toISOString()),
       supabase
         .from("calls")
-        .select("duration_sec, call_cost_eur, ended_at, started_at, created_at")
+        .select("duration_sec, call_cost_eur, ended_at, started_at, created_at, outcome")
         .eq("clinic_id", clinicId)
         .eq("status", "ended")
         .order("created_at", { ascending: false }),
@@ -156,8 +153,9 @@ export function KpiGrid() {
       return acc + ((row.duration_sec || 0) / 60) * callCostPerMin;
     }, 0);
 
-    const leads30 = leads30d.count || 0;
-    const contactedRate = leads30 ? Math.round(((contacted.count || 0) / leads30) * 100) : 0;
+    const endedCallsCount = callsInSelectedMonth.length;
+    const callsBookedCount = callsInSelectedMonth.filter((row) => row.outcome === "appointment_scheduled").length;
+    const callToAppointmentRate = endedCallsCount ? Math.round((callsBookedCount / endedCallsCount) * 100) : 0;
     const leadsClosedThisMonth = (closedLeads.data || []).filter((lead) => {
       const referenceDate =
         lead.converted_to_client && lead.converted_at
@@ -180,7 +178,9 @@ export function KpiGrid() {
       leadsToday: leadsToday.count || 0,
       leads7d: leads7d.count || 0,
       leads30d: leads30d.count || 0,
-      contactedRate,
+      callToAppointmentRate,
+      callsEndedMonth: endedCallsCount,
+      callsBookedMonth: callsBookedCount,
       appointments: appointments.count || 0,
       noResponse: noResponse.count || 0,
       callCostTotal: Number(totalCallCost.toFixed(2)),
@@ -236,9 +236,10 @@ export function KpiGrid() {
       note: "Último mes",
     },
     {
-      label: "% contactados",
-      value: `${kpis.contactedRate}%`,
-      note: "Base 30 días",
+      label: "Llamadas -> cita",
+      value: `${kpis.callToAppointmentRate}%`,
+      note: monthLabel,
+      detail: `${kpis.callsBookedMonth} agendadas de ${kpis.callsEndedMonth} llamadas`,
     },
     {
       label: "Citas agendadas",
