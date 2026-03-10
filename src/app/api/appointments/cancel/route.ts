@@ -51,6 +51,7 @@ export async function POST(request: Request) {
     typeof body.reason === "string" && body.reason.trim()
       ? body.reason.trim()
       : "Cancelada desde la agenda de la app";
+  let webhookWarning: string | null = null;
 
   if (appointment.entry_type !== "internal_block") {
     const webhookResponse = await fetch(CANCEL_APPOINTMENT_WEBHOOK_URL, {
@@ -75,10 +76,7 @@ export async function POST(request: Request) {
     }).catch(() => null);
 
     if (!webhookResponse?.ok) {
-      return NextResponse.json(
-        { error: "No se pudo notificar la cancelacion al webhook de n8n." },
-        { status: 502 }
-      );
+      webhookWarning = "No se pudo notificar la cancelacion al webhook de n8n.";
     }
   }
 
@@ -96,5 +94,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: updateError.message || "No se pudo cancelar la cita." }, { status: 400 });
   }
 
-  return NextResponse.json({ ok: true, appointment_id: appointment.id });
+  return NextResponse.json({ ok: true, appointment_id: appointment.id, warning: webhookWarning || null });
 }

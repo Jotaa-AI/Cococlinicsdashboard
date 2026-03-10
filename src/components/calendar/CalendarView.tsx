@@ -135,7 +135,7 @@ function getDraftFromDates(start: Date, end?: Date): DraftEntryState {
     endTime: toTimeInputValue(safeEnd),
     title: "",
     leadName: "",
-    leadPhone: "+34",
+    leadPhone: "",
   };
 }
 
@@ -167,8 +167,8 @@ export function CalendarView() {
       extendedProps: {
         sourceId: item.id,
         entryType: item.entry_type === "internal_block" ? "busy_block" : "appointment",
-        leadName: item.entry_type === "lead_visit" ? item.lead_name : null,
-        leadPhone: item.entry_type === "lead_visit" ? item.lead_phone : null,
+        leadName: item.entry_type === "internal_block" ? null : item.lead_name,
+        leadPhone: item.entry_type === "internal_block" ? null : item.lead_phone,
         formTitle: item.title,
         notes: item.notes,
         reason: item.entry_type === "internal_block" ? item.title || item.notes : null,
@@ -246,6 +246,8 @@ export function CalendarView() {
     if (!start || !end) return;
 
     const entryType = arg.event.extendedProps.entryType === "busy_block" ? "busy_block" : "appointment";
+    const rawTitle = String(arg.event.extendedProps.formTitle || arg.event.extendedProps.reason || "");
+    const fallbackLeadName = rawTitle.split(" · ")[0]?.trim() || rawTitle;
     setDialogMode("edit");
     setDraftEntry({
       sourceId: String(arg.event.extendedProps.sourceId),
@@ -253,9 +255,9 @@ export function CalendarView() {
       date: toDateInputValue(start),
       startTime: toTimeInputValue(start),
       endTime: toTimeInputValue(end),
-      title: String(arg.event.extendedProps.formTitle || arg.event.extendedProps.reason || ""),
-      leadName: entryType === "appointment" ? String(arg.event.extendedProps.leadName || "") : "",
-      leadPhone: entryType === "appointment" ? String(arg.event.extendedProps.leadPhone || "+34") : "+34",
+      title: rawTitle,
+      leadName: entryType === "appointment" ? String(arg.event.extendedProps.leadName || fallbackLeadName || "") : "",
+      leadPhone: entryType === "appointment" ? String(arg.event.extendedProps.leadPhone || "") : "",
     });
     setFormError(null);
     setFormNotice(null);
@@ -303,17 +305,32 @@ export function CalendarView() {
     }
 
     if (draftEntry.type === "appointment") {
-      const normalizedPhone = normalizeEsPhone(draftEntry.leadPhone);
-      if (!draftEntry.leadName.trim() || !normalizedPhone) {
-        setFormError("Nombre y teléfono en formato +34 son obligatorios para una cita.");
-        return;
+      const trimmedLeadName = draftEntry.leadName.trim();
+      const trimmedLeadPhoneRaw = draftEntry.leadPhone.trim();
+      const normalizedPhone = normalizeEsPhone(trimmedLeadPhoneRaw);
+
+      if (dialogMode === "create") {
+        if (!trimmedLeadName || !normalizedPhone) {
+          setFormError("Nombre y teléfono en formato +34 son obligatorios para una cita.");
+          return;
+        }
+      } else {
+        const hasAnyLeadInput = Boolean(trimmedLeadName || trimmedLeadPhoneRaw);
+        if (hasAnyLeadInput && (!trimmedLeadName || !normalizedPhone)) {
+          setFormError("Si editas datos del lead, indica nombre y teléfono completo en formato +34.");
+          return;
+        }
       }
 
       const payload = {
         title: draftEntry.title.trim(),
         notes: draftEntry.title.trim(),
-        lead_name: draftEntry.leadName.trim(),
-        lead_phone: normalizedPhone,
+        ...(trimmedLeadName && normalizedPhone
+          ? {
+              lead_name: trimmedLeadName,
+              lead_phone: normalizedPhone,
+            }
+          : {}),
         start_at: slot.startAt,
         end_at: slot.endAt,
         ...(dialogMode === "edit"
@@ -589,7 +606,7 @@ export function CalendarView() {
                       onChange={(event) => {
                         const digits = event.target.value.replace(/\D/g, "");
                         if (!digits) {
-                          handleDraftChange("leadPhone", "+34");
+                          handleDraftChange("leadPhone", "");
                           return;
                         }
 
