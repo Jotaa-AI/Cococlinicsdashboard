@@ -63,12 +63,13 @@ export function PostVisitLeadsCard() {
       .from("appointments")
       .select("*")
       .eq("clinic_id", clinicId)
-      .or("entry_type.eq.lead_visit,entry_type.is.null")
       .neq("status", "canceled")
       .lt("start_at", startOfTomorrowIso())
       .order("start_at", { ascending: true });
 
-    const orderedAppointments = (appointmentsData || []) as Appointment[];
+    const orderedAppointments = ((appointmentsData || []) as Appointment[]).filter(
+      (appointment) => appointment.entry_type !== "internal_block"
+    );
 
     const firstVisitByLead = new Map<string, Appointment>();
     for (const appointment of orderedAppointments) {
