@@ -258,9 +258,12 @@ export function KpiGrid() {
     },
     {
       label: "Clientes cerrados",
-      value: kpis.clientsClosedMonth,
+      value: currencyPreciseFormatter.format(kpis.clientsClosedValueMonth),
       note: monthLabel,
-      detail: `Total cerrado: ${currencyPreciseFormatter.format(kpis.clientsClosedValueMonth)}`,
+      detail:
+        kpis.clientsClosedMonth === 1
+          ? "1 lead cerrado"
+          : `${kpis.clientsClosedMonth} leads cerrados`,
     },
   ];
 
