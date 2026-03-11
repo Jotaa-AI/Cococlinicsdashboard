@@ -146,6 +146,7 @@ export function CalendarView() {
   const clinicId = profile?.clinic_id;
 
   const [events, setEvents] = useState<CalendarEventItem[]>([]);
+  const [upcomingAppointments, setUpcomingAppointments] = useState<Appointment[]>([]);
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
   const [calendarTitle, setCalendarTitle] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -197,9 +198,32 @@ export function CalendarView() {
     buildEvents((data || []) as Appointment[]);
   }, [buildEvents, clinicId, range, supabase]);
 
+  const loadUpcomingAppointments = useCallback(async () => {
+    if (!clinicId) return;
+
+    const { data, error } = await supabase
+      .from("appointments")
+      .select("*")
+      .eq("clinic_id", clinicId)
+      .eq("status", "scheduled")
+      .gte("start_at", new Date().toISOString())
+      .order("start_at", { ascending: true })
+      .limit(8);
+
+    if (error) return;
+
+    setUpcomingAppointments(
+      ((data || []) as Appointment[]).filter((item) => item.entry_type !== "internal_block")
+    );
+  }, [clinicId, supabase]);
+
   useEffect(() => {
     loadEvents();
   }, [loadEvents]);
+
+  useEffect(() => {
+    loadUpcomingAppointments();
+  }, [loadUpcomingAppointments]);
 
   useEffect(() => {
     if (!clinicId) return;
@@ -209,14 +233,17 @@ export function CalendarView() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "appointments", filter: `clinic_id=eq.${clinicId}` },
-        loadEvents
+        () => {
+          loadEvents();
+          loadUpcomingAppointments();
+        }
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [clinicId, loadEvents, supabase]);
+  }, [clinicId, loadEvents, loadUpcomingAppointments, supabase]);
 
   const calendarPlugins = useMemo(() => [timeGridPlugin, dayGridPlugin, interactionPlugin], []);
 
@@ -539,6 +566,57 @@ export function CalendarView() {
           });
         }}
       />
+
+      <div className="rounded-3xl border border-border bg-white/80 p-4">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-semibold text-foreground">Próximas citas</p>
+            <p className="text-xs text-muted-foreground">
+              Solo se muestran visitas futuras de leads o pacientes.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+            {upcomingAppointments.length} próximas
+          </span>
+        </div>
+
+        {upcomingAppointments.length ? (
+          <div className="space-y-3">
+            {upcomingAppointments.map((appointment) => (
+              <div
+                key={appointment.id}
+                className="flex flex-col gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="space-y-1">
+                  <p className="text-sm font-semibold text-slate-900">
+                    {appointment.lead_name || appointment.title || "Cita sin nombre"}
+                  </p>
+                  <p className="text-xs text-slate-600">
+                    {new Date(appointment.start_at).toLocaleString("es-ES", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      hour12: false,
+                    })}{" "}
+                    · {appointment.title || "Valoración gratuita"}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {appointment.lead_phone || "Sin teléfono"} {appointment.notes ? `· ${appointment.notes}` : ""}
+                  </p>
+                </div>
+
+                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">
+                  {appointment.status}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">No hay próximas citas agendadas.</p>
+        )}
+      </div>
 
       <Dialog open={dialogOpen} onOpenChange={(nextOpen) => (nextOpen ? setDialogOpen(true) : resetDialog())}>
         <DialogContent>

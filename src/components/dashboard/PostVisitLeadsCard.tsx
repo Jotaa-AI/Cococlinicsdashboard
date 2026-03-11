@@ -16,6 +16,11 @@ interface PostVisitLeadRow {
   lead: Lead | null;
 }
 
+interface VisitSections {
+  today: PostVisitLeadRow[];
+  review: PostVisitLeadRow[];
+}
+
 function normalizePhone(rawPhone?: string | null) {
   if (!rawPhone) return null;
   let digits = rawPhone.replace(/\D/g, "");
@@ -29,6 +34,21 @@ function startOfTomorrowIso() {
   const now = new Date();
   now.setHours(24, 0, 0, 0);
   return now.toISOString();
+}
+
+function madridDateKey(value: string | Date) {
+  const date = value instanceof Date ? value : new Date(value);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Madrid",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === "year")?.value || "0000";
+  const month = parts.find((part) => part.type === "month")?.value || "00";
+  const day = parts.find((part) => part.type === "day")?.value || "00";
+  return `${year}-${month}-${day}`;
 }
 
 function formatVisitDate(value: string) {
@@ -209,11 +229,35 @@ export function PostVisitLeadsCard() {
     };
   }, [supabase, clinicId, loadRows]);
 
+  const visitSections = useMemo<VisitSections>(() => {
+    const todayKey = madridDateKey(new Date());
+    const nowTs = Date.now();
+    const today: PostVisitLeadRow[] = [];
+    const review: PostVisitLeadRow[] = [];
+
+    for (const row of rows) {
+      const appointmentKey = madridDateKey(row.appointment.start_at);
+      const appointmentTs = new Date(row.appointment.start_at).getTime();
+
+      if (appointmentKey > todayKey) continue;
+
+      if (appointmentKey === todayKey && appointmentTs > nowTs) {
+        today.push(row);
+        continue;
+      }
+
+      review.push(row);
+    }
+
+    return { today, review };
+  }, [rows]);
+
   const summaryLabel = useMemo(() => {
-    if (!rows.length) return "Sin primeras visitas pendientes";
-    if (rows.length === 1) return "1 primera visita pendiente de gestión";
-    return `${rows.length} primeras visitas pendientes de gestión`;
-  }, [rows.length]);
+    const totalVisible = visitSections.today.length + visitSections.review.length;
+    if (!totalVisible) return "Sin citas para gestionar";
+    if (totalVisible === 1) return "1 cita para gestionar";
+    return `${totalVisible} citas para gestionar`;
+  }, [visitSections.review.length, visitSections.today.length]);
 
   const setOutcome = useCallback(
     async (row: PostVisitLeadRow, targetStage: string) => {
@@ -291,19 +335,68 @@ export function PostVisitLeadsCard() {
       <CelebrationOverlay open={showCelebration} />
       <Card>
         <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <CardTitle>Primeras visitas pendientes de cierre</CardTitle>
+          <CardTitle>Visitas de hoy y pendientes de cierre</CardTitle>
           <Badge variant="soft">{summaryLabel}</Badge>
         </CardHeader>
         <CardContent>
-          {rows.length ? (
+          {visitSections.today.length || visitSections.review.length ? (
             <div className="space-y-4">
-              {rows.map((row) => {
+              {visitSections.today.length ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-sky-500" />
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-sky-700">
+                      Citas de hoy por atender
+                    </p>
+                  </div>
+
+                  {visitSections.today.map((row) => {
+                    const lead = row.lead;
+                    const leadId = lead?.id || row.appointment.id;
+
+                    return (
+                      <div
+                        key={leadId}
+                        className="relative overflow-hidden rounded-2xl border border-sky-200 bg-gradient-to-r from-sky-50 via-white to-cyan-50 p-4 shadow-sm ring-1 ring-sky-100"
+                      >
+                        <div className="absolute inset-y-0 left-0 w-1 rounded-l-2xl bg-sky-500" />
+                        <div className="flex flex-col gap-2 pl-2 sm:flex-row sm:items-start sm:justify-between">
+                          <div className="space-y-1">
+                            <p className="text-sm font-semibold">
+                              {lead?.full_name || row.appointment.lead_name || "Lead sin nombre"}
+                            </p>
+                            <p className="text-xs text-slate-600">
+                              Hoy a las {formatVisitDate(row.appointment.start_at).slice(-5)} ·{" "}
+                              {row.appointment.title || "Valoración gratuita"}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              Teléfono: {lead?.phone || row.appointment.lead_phone || "—"}
+                            </p>
+                          </div>
+                          <Badge variant="soft">Hoy</Badge>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {visitSections.review.length ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 w-2.5 rounded-full bg-rose-500" />
+                    <p className="text-xs font-semibold uppercase tracking-[0.24em] text-rose-700">
+                      Revisar y actualizar estado
+                    </p>
+                  </div>
+
+                  {visitSections.review.map((row) => {
                 const lead = row.lead;
                 const leadId = lead?.id || row.appointment.id;
                 const saving = savingLeadId === lead?.id;
 
                 return (
-                  <div key={leadId} className="rounded-2xl border border-border bg-white p-4">
+                  <div key={leadId} className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div className="space-y-1">
                         <p className="text-sm font-semibold">
@@ -410,10 +503,12 @@ export function PostVisitLeadsCard() {
                     )}
                   </div>
                 );
-              })}
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : (
-            <p className="text-sm text-muted-foreground">No hay primeras visitas pendientes de cierre hasta hoy.</p>
+            <p className="text-sm text-muted-foreground">No hay citas de hoy ni visitas pendientes de revisión.</p>
           )}
         </CardContent>
       </Card>
