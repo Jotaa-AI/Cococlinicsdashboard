@@ -15,11 +15,12 @@ interface KpiValues {
   leads7d: number;
   leads30d: number;
   callToAppointmentRate: number;
-  callsEndedMonth: number;
-  callsBookedMonth: number;
+  calledLeadsMonth: number;
+  bookedLeadsMonth: number;
   appointments: number;
   noResponse: number;
   callCostTotal: number;
+  costToClosedValueRate: number | null;
   clientsClosedMonth: number;
   clientsClosedValueMonth: number;
 }
@@ -31,6 +32,40 @@ const currencyPreciseFormatter = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 4,
 });
 
+const percentFormatter = new Intl.NumberFormat("es-ES", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
+});
+
+function normalizePhone(value?: string | null) {
+  if (!value) return null;
+  const normalized = value.replace(/[^\d+]/g, "");
+  if (!normalized) return null;
+  if (normalized.startsWith("+")) return normalized;
+  return `+${normalized}`;
+}
+
+function getCallLeadKey(call: { lead_id?: string | null; phone?: string | null }) {
+  if (call.lead_id) return `lead:${call.lead_id}`;
+  const phone = normalizePhone(call.phone);
+  return phone ? `phone:${phone}` : null;
+}
+
+function getAppointmentLeadKey(appointment: { lead_id?: string | null; lead_phone?: string | null }) {
+  if (appointment.lead_id) return `lead:${appointment.lead_id}`;
+  const phone = normalizePhone(appointment.lead_phone);
+  return phone ? `phone:${phone}` : null;
+}
+
+function getReferenceTimestamp(...dates: Array<string | null | undefined>) {
+  for (const value of dates) {
+    if (!value) continue;
+    const timestamp = new Date(value).getTime();
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return null;
+}
+
 export function KpiGrid() {
   const supabase = createSupabaseBrowserClient();
   const { profile } = useProfile();
@@ -40,11 +75,12 @@ export function KpiGrid() {
     leads7d: 0,
     leads30d: 0,
     callToAppointmentRate: 0,
-    callsEndedMonth: 0,
-    callsBookedMonth: 0,
+    calledLeadsMonth: 0,
+    bookedLeadsMonth: 0,
     appointments: 0,
     noResponse: 0,
     callCostTotal: 0,
+    costToClosedValueRate: null,
     clientsClosedMonth: 0,
     clientsClosedValueMonth: 0,
   });
@@ -84,6 +120,7 @@ export function KpiGrid() {
       noResponse,
       appointments,
       endedCallsInMonth,
+      appointmentsForConversion,
       closedLeads,
     ] =
       await Promise.all([
@@ -117,10 +154,14 @@ export function KpiGrid() {
         .gte("start_at", new Date().toISOString()),
       supabase
         .from("calls")
-        .select("duration_sec, call_cost_eur, ended_at, started_at, created_at, outcome")
+        .select("lead_id, phone, duration_sec, call_cost_eur, ended_at, started_at, created_at, outcome")
         .eq("clinic_id", clinicId)
         .eq("status", "ended")
         .order("created_at", { ascending: false }),
+      supabase
+        .from("appointments")
+        .select("lead_id, lead_phone, status, source_channel, created_at, start_at")
+        .eq("clinic_id", clinicId),
       supabase
         .from("leads")
         .select("id, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at")
@@ -140,10 +181,8 @@ export function KpiGrid() {
     const monthStartTs = new Date(monthRange.startIso).getTime();
     const monthEndTs = new Date(monthRange.endIso).getTime();
     const callsInSelectedMonth = (endedCallsInMonth.data || []).filter((row) => {
-      const referenceDate = row.ended_at || row.started_at || row.created_at;
-      if (!referenceDate) return false;
-      const timestamp = new Date(referenceDate).getTime();
-      return timestamp >= monthStartTs && timestamp < monthEndTs;
+      const timestamp = getReferenceTimestamp(row.ended_at, row.started_at, row.created_at);
+      return timestamp !== null && timestamp >= monthStartTs && timestamp < monthEndTs;
     });
 
     const totalCallCost = callsInSelectedMonth.reduce((acc, row) => {
@@ -153,9 +192,42 @@ export function KpiGrid() {
       return acc + ((row.duration_sec || 0) / 60) * callCostPerMin;
     }, 0);
 
-    const endedCallsCount = callsInSelectedMonth.length;
-    const callsBookedCount = callsInSelectedMonth.filter((row) => row.outcome === "appointment_scheduled").length;
-    const callToAppointmentRate = endedCallsCount ? Math.round((callsBookedCount / endedCallsCount) * 100) : 0;
+    const calledLeadKeys = new Set(
+      callsInSelectedMonth
+        .map((row) => getCallLeadKey(row))
+        .filter((value): value is string => Boolean(value))
+    );
+
+    const bookedLeadKeysFromAppointments = new Set(
+      (appointmentsForConversion.data || [])
+        .filter((appointment) => appointment.status === "scheduled" && appointment.source_channel === "call_ai")
+        .filter((appointment) => {
+          const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
+          return timestamp !== null && timestamp >= monthStartTs && timestamp < monthEndTs;
+        })
+        .map((appointment) => getAppointmentLeadKey(appointment))
+        .filter((value): value is string => Boolean(value))
+        .filter((key) => calledLeadKeys.has(key))
+    );
+
+    const bookedLeadKeysFromOutcomes = new Set(
+      callsInSelectedMonth
+        .filter((row) => row.outcome === "appointment_scheduled")
+        .map((row) => getCallLeadKey(row))
+        .filter((value): value is string => Boolean(value))
+        .filter((key) => calledLeadKeys.has(key))
+    );
+
+    const bookedLeadKeys = new Set([
+      ...Array.from(bookedLeadKeysFromAppointments),
+      ...Array.from(bookedLeadKeysFromOutcomes),
+    ]);
+
+    const calledLeadsCount = calledLeadKeys.size;
+    const bookedLeadsCount = bookedLeadKeys.size;
+    const callToAppointmentRate = calledLeadsCount
+      ? Number(((bookedLeadsCount / calledLeadsCount) * 100).toFixed(1))
+      : 0;
     const leadsClosedThisMonth = (closedLeads.data || []).filter((lead) => {
       const referenceDate =
         lead.converted_to_client && lead.converted_at
@@ -173,17 +245,20 @@ export function KpiGrid() {
       const parsedValue = parseNumeric(lead.converted_value_eur);
       return acc + (parsedValue || 0);
     }, 0);
+    const costToClosedValueRate =
+      clientsClosedValueMonth > 0 ? Number(((totalCallCost / clientsClosedValueMonth) * 100).toFixed(1)) : null;
 
     setKpis({
       leadsToday: leadsToday.count || 0,
       leads7d: leads7d.count || 0,
       leads30d: leads30d.count || 0,
       callToAppointmentRate,
-      callsEndedMonth: endedCallsCount,
-      callsBookedMonth: callsBookedCount,
+      calledLeadsMonth: calledLeadsCount,
+      bookedLeadsMonth: bookedLeadsCount,
       appointments: appointments.count || 0,
       noResponse: noResponse.count || 0,
       callCostTotal: Number(totalCallCost.toFixed(2)),
+      costToClosedValueRate,
       clientsClosedMonth,
       clientsClosedValueMonth: Number(clientsClosedValueMonth.toFixed(2)),
     });
@@ -237,9 +312,9 @@ export function KpiGrid() {
     },
     {
       label: "Llamadas -> cita",
-      value: `${kpis.callToAppointmentRate}%`,
+      value: `${percentFormatter.format(kpis.callToAppointmentRate)}%`,
       note: monthLabel,
-      detail: `${kpis.callsBookedMonth} agendadas de ${kpis.callsEndedMonth} llamadas`,
+      detail: `${kpis.bookedLeadsMonth} leads agendados de ${kpis.calledLeadsMonth} leads llamados`,
     },
     {
       label: "Citas agendadas",
@@ -255,6 +330,15 @@ export function KpiGrid() {
       label: "Coste total llamadas",
       value: currencyPreciseFormatter.format(kpis.callCostTotal),
       note: monthLabel,
+    },
+    {
+      label: "Coste / valor cerrado",
+      value: kpis.costToClosedValueRate === null ? "—" : `${percentFormatter.format(kpis.costToClosedValueRate)}%`,
+      note: monthLabel,
+      detail:
+        kpis.costToClosedValueRate === null
+          ? "Sin valor cerrado en el mes"
+          : `${currencyPreciseFormatter.format(kpis.callCostTotal)} en llamadas sobre ${currencyPreciseFormatter.format(kpis.clientsClosedValueMonth)} cerrados`,
     },
     {
       label: "Clientes cerrados",
