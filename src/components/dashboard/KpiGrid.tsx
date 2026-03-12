@@ -151,7 +151,9 @@ export function KpiGrid() {
         .eq("clinic_id", clinicId)
         .or("entry_type.eq.lead_visit,entry_type.is.null")
         .eq("status", "scheduled")
-        .gte("start_at", new Date().toISOString()),
+        .eq("source_channel", "call_ai")
+        .gte("start_at", monthRange.startIso)
+        .lt("start_at", monthRange.endIso),
       supabase
         .from("calls")
         .select("lead_id, phone, duration_sec, call_cost_eur, ended_at, started_at, created_at, outcome")
@@ -317,9 +319,10 @@ export function KpiGrid() {
       detail: `${kpis.bookedLeadsMonth} leads agendados de ${kpis.calledLeadsMonth} leads llamados`,
     },
     {
-      label: "Citas agendadas",
+      label: "Visitas agendadas",
       value: kpis.appointments,
-      note: "Próximos 30 días",
+      note: monthLabel,
+      detail: "Solo IA de llamadas",
     },
     {
       label: "No responde",
