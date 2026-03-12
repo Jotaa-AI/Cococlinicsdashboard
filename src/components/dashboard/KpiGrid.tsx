@@ -149,7 +149,6 @@ export function KpiGrid() {
         .from("appointments")
         .select("id", { count: "exact", head: true })
         .eq("clinic_id", clinicId)
-        .or("entry_type.eq.lead_visit,entry_type.is.null")
         .eq("status", "scheduled")
         .gte("start_at", monthRange.startIso)
         .lt("start_at", monthRange.endIso),

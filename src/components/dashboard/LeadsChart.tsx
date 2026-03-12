@@ -152,7 +152,6 @@ export function LeadsChart() {
         .select("start_at")
         .eq("clinic_id", clinicId)
         .eq("status", "scheduled")
-        .or("entry_type.eq.lead_visit,entry_type.is.null")
         .gte("start_at", rangeStart.toISOString())
         .lte("start_at", rangeEnd.toISOString()),
     ]);
