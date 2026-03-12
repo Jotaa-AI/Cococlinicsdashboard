@@ -84,7 +84,6 @@ export function PostVisitLeadsCard() {
       .select("*")
       .eq("clinic_id", clinicId)
       .eq("status", "scheduled")
-      .eq("source_channel", "call_ai")
       .lt("start_at", startOfTomorrowIso())
       .order("start_at", { ascending: true });
 

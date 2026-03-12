@@ -151,7 +151,6 @@ export function KpiGrid() {
         .eq("clinic_id", clinicId)
         .or("entry_type.eq.lead_visit,entry_type.is.null")
         .eq("status", "scheduled")
-        .eq("source_channel", "call_ai")
         .gte("start_at", monthRange.startIso)
         .lt("start_at", monthRange.endIso),
       supabase
@@ -322,7 +321,7 @@ export function KpiGrid() {
       label: "Visitas agendadas",
       value: kpis.appointments,
       note: monthLabel,
-      detail: "Solo IA de llamadas",
+      detail: "Todas las citas",
     },
     {
       label: "No responde",

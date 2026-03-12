@@ -152,7 +152,6 @@ export function LeadsChart() {
         .select("start_at")
         .eq("clinic_id", clinicId)
         .eq("status", "scheduled")
-        .eq("source_channel", "call_ai")
         .or("entry_type.eq.lead_visit,entry_type.is.null")
         .gte("start_at", rangeStart.toISOString())
         .lte("start_at", rangeEnd.toISOString()),
@@ -259,7 +258,7 @@ export function LeadsChart() {
           <div className="rounded-2xl border bg-primary/5 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Visitas agendadas</p>
             <p className="font-display text-3xl font-semibold text-primary">{appointmentsTotal}</p>
-            <p className="text-xs text-muted-foreground">Solo IA de llamadas</p>
+            <p className="text-xs text-muted-foreground">Todas las citas del periodo</p>
           </div>
         </div>
       </div>
