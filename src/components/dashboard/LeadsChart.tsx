@@ -146,7 +146,7 @@ export function LeadsChart() {
       supabase.from("leads").select("created_at").eq("clinic_id", clinicId),
       supabase
         .from("appointments")
-        .select("status, start_at, created_at, entry_type")
+        .select("status, start_at, created_at")
         .eq("clinic_id", clinicId),
     ]);
 
@@ -169,7 +169,7 @@ export function LeadsChart() {
 
     for (const appointment of appointments) {
       if (appointment.status !== "scheduled" || isInternalBlock(appointment)) continue;
-      const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
+      const timestamp = getReferenceTimestamp(appointment.start_at, appointment.created_at);
       if (!inRange(timestamp, rangeStartMs, rangeEndMs)) continue;
       const date = new Date(timestamp as number);
       const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);

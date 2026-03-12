@@ -108,7 +108,7 @@ export function KpiGrid() {
         .eq("status", "ended"),
       supabase
         .from("appointments")
-        .select("id, lead_id, lead_phone, status, start_at, created_at, entry_type")
+        .select("id, lead_id, lead_phone, status, start_at, created_at")
         .eq("clinic_id", clinicId),
     ]);
 
@@ -133,7 +133,7 @@ export function KpiGrid() {
 
     const scheduledAppointmentsMonth = appointments.filter((appointment) => {
       if (!isScheduledLeadAppointment(appointment)) return false;
-      return inRange(getReferenceTimestamp(appointment.created_at, appointment.start_at), monthRange.startMs, monthRange.endMs);
+      return inRange(getReferenceTimestamp(appointment.start_at, appointment.created_at), monthRange.startMs, monthRange.endMs);
     });
 
     const closedLeadKeys = new Set(
