@@ -29,6 +29,17 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import { Button } from "@/components/ui/button";
+import type { Appointment, Lead } from "@/lib/types";
+import {
+  getLeadClosedTimestamp,
+  getLeadKeyFromAppointment,
+  getLeadKeyFromLead,
+  getReferenceTimestamp,
+  inRange,
+  isAiAppointment,
+  isLeadClosed,
+  isScheduledAiAppointment,
+} from "@/lib/dashboard/aiMetrics";
 
 type ViewMode = "day" | "week" | "month";
 
@@ -37,7 +48,8 @@ interface DataPoint {
   label: string;
   fullLabel: string;
   leads: number;
-  appointments: number;
+  aiAppointments: number;
+  aiClosures: number;
 }
 
 const viewLabels: Record<ViewMode, string> = {
@@ -99,7 +111,8 @@ function buildBuckets(viewMode: ViewMode, referenceDate: Date): DataPoint[] {
       label: format(hour, "HH:mm"),
       fullLabel: format(hour, "dd/MM/yyyy HH:mm"),
       leads: 0,
-      appointments: 0,
+      aiAppointments: 0,
+      aiClosures: 0,
     }));
   }
 
@@ -111,7 +124,8 @@ function buildBuckets(viewMode: ViewMode, referenceDate: Date): DataPoint[] {
     label: viewMode === "week" ? format(day, "EEE d", { locale: es }) : format(day, "d"),
     fullLabel: format(day, "dd/MM/yyyy"),
     leads: 0,
-    appointments: 0,
+    aiAppointments: 0,
+    aiClosures: 0,
   }));
 }
 
@@ -119,11 +133,12 @@ export function LeadsChart() {
   const supabase = createSupabaseBrowserClient();
   const { profile } = useProfile();
   const clinicId = profile?.clinic_id;
-  const [viewMode, setViewMode] = useState<ViewMode>("week");
+  const [viewMode, setViewMode] = useState<ViewMode>("month");
   const [referenceDate, setReferenceDate] = useState(() => new Date());
   const [data, setData] = useState<DataPoint[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
   const [appointmentsTotal, setAppointmentsTotal] = useState(0);
+  const [closuresTotal, setClosuresTotal] = useState(0);
 
   const rangeStart = useMemo(() => startForView(viewMode, referenceDate), [viewMode, referenceDate]);
   const rangeEnd = useMemo(() => endForView(viewMode, referenceDate), [viewMode, referenceDate]);
@@ -137,48 +152,70 @@ export function LeadsChart() {
       setData([]);
       setLeadsTotal(0);
       setAppointmentsTotal(0);
+      setClosuresTotal(0);
       return;
     }
 
     const [leadsResult, appointmentsResult] = await Promise.all([
-      supabase
-        .from("leads")
-        .select("created_at")
-        .eq("clinic_id", clinicId)
-        .gte("created_at", rangeStart.toISOString())
-        .lte("created_at", rangeEnd.toISOString()),
+      supabase.from("leads").select("id, phone, created_at, converted_to_client, converted_at, updated_at, stage_key").eq("clinic_id", clinicId),
       supabase
         .from("appointments")
-        .select("start_at")
-        .eq("clinic_id", clinicId)
-        .eq("status", "scheduled")
-        .gte("start_at", rangeStart.toISOString())
-        .lte("start_at", rangeEnd.toISOString()),
+        .select("lead_id, lead_phone, status, source_channel, created_at, start_at, entry_type")
+        .eq("clinic_id", clinicId),
     ]);
+
+    const leads = ((leadsResult.data || []) as Lead[]).filter(Boolean);
+    const appointments = ((appointmentsResult.data || []) as Appointment[]).filter(Boolean);
+
+    const aiAttributionKeys = new Set(
+      appointments
+        .filter((appointment) => isAiAppointment(appointment) && appointment.status !== "canceled")
+        .map((appointment) => getLeadKeyFromAppointment(appointment))
+        .filter((value): value is string => Boolean(value))
+    );
 
     const points = buildBuckets(viewMode, referenceDate);
     const indexByKey = new Map(points.map((point, index) => [point.bucketKey, index]));
 
-    for (const row of leadsResult.data || []) {
-      if (!row.created_at) continue;
-      const date = new Date(row.created_at);
+    for (const lead of leads) {
+      if (!lead.created_at) continue;
+      const date = new Date(lead.created_at);
+      const ts = date.getTime();
+      if (!inRange(ts, rangeStart.getTime(), addDays(rangeEnd, 1).getTime())) {
+        // day/week/month end helpers are inclusive-like display ranges; rely on bucket map next
+      }
       const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);
       const index = indexByKey.get(key);
       if (index !== undefined) points[index].leads += 1;
     }
 
-    for (const row of appointmentsResult.data || []) {
-      if (!row.start_at) continue;
-      const date = new Date(row.start_at);
+    for (const appointment of appointments) {
+      if (!isScheduledAiAppointment(appointment)) continue;
+      const refTs = getReferenceTimestamp(appointment.created_at, appointment.start_at);
+      if (refTs === null) continue;
+      const date = new Date(refTs);
       const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);
       const index = indexByKey.get(key);
-      if (index !== undefined) points[index].appointments += 1;
+      if (index !== undefined) points[index].aiAppointments += 1;
+    }
+
+    for (const lead of leads) {
+      if (!isLeadClosed(lead)) continue;
+      const leadKey = getLeadKeyFromLead(lead);
+      if (!leadKey || !aiAttributionKeys.has(leadKey)) continue;
+      const closedTs = getReferenceTimestamp(getLeadClosedTimestamp(lead));
+      if (closedTs === null) continue;
+      const date = new Date(closedTs);
+      const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);
+      const index = indexByKey.get(key);
+      if (index !== undefined) points[index].aiClosures += 1;
     }
 
     setData(points);
     setLeadsTotal(points.reduce((acc, point) => acc + point.leads, 0));
-    setAppointmentsTotal(points.reduce((acc, point) => acc + point.appointments, 0));
-  }, [clinicId, rangeStart, rangeEnd, supabase, viewMode, referenceDate]);
+    setAppointmentsTotal(points.reduce((acc, point) => acc + point.aiAppointments, 0));
+    setClosuresTotal(points.reduce((acc, point) => acc + point.aiClosures, 0));
+  }, [clinicId, rangeEnd, rangeStart, referenceDate, supabase, viewMode]);
 
   useEffect(() => {
     loadData();
@@ -248,16 +285,21 @@ export function LeadsChart() {
           </div>
         </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid gap-3 sm:grid-cols-3">
           <div className="rounded-2xl border bg-background px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Leads</p>
+            <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Leads entrados</p>
             <p className="font-display text-3xl font-semibold">{leadsTotal}</p>
             <p className="text-xs text-muted-foreground">Captados en el periodo</p>
           </div>
           <div className="rounded-2xl border bg-primary/5 px-4 py-3">
-            <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Visitas agendadas</p>
+            <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Citas IA</p>
             <p className="font-display text-3xl font-semibold text-primary">{appointmentsTotal}</p>
-            <p className="text-xs text-muted-foreground">Todas las citas del periodo</p>
+            <p className="text-xs text-muted-foreground">Citas creadas por la IA</p>
+          </div>
+          <div className="rounded-2xl border bg-emerald-500/5 px-4 py-3">
+            <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Cierres IA</p>
+            <p className="font-display text-3xl font-semibold text-emerald-700">{closuresTotal}</p>
+            <p className="text-xs text-muted-foreground">Leads cerrados atribuibles a IA</p>
           </div>
         </div>
       </div>
@@ -274,10 +316,11 @@ export function LeadsChart() {
                 const point = payload?.[0]?.payload as DataPoint | undefined;
                 return point?.fullLabel || "";
               }}
-              formatter={(value, name) => [
-                `${value}`,
-                name === "leads" ? "Leads" : "Visitas agendadas",
-              ]}
+              formatter={(value, name) => {
+                if (name === "leads") return [`${value}`, "Leads entrados"];
+                if (name === "aiAppointments") return [`${value}`, "Citas IA"];
+                return [`${value}`, "Cierres IA"];
+              }}
               contentStyle={{
                 borderRadius: 18,
                 borderColor: "hsl(var(--border))",
@@ -288,8 +331,17 @@ export function LeadsChart() {
             <Bar dataKey="leads" fill="hsl(var(--primary) / 0.18)" radius={[10, 10, 0, 0]} maxBarSize={28} />
             <Line
               type="monotone"
-              dataKey="appointments"
+              dataKey="aiAppointments"
               stroke="hsl(var(--primary))"
+              strokeWidth={3}
+              dot={{ r: 3, strokeWidth: 2 }}
+              activeDot={{ r: 5 }}
+            />
+            <Line
+              type="monotone"
+              dataKey="aiClosures"
+              stroke="hsl(151 55% 41%)"
+              strokeDasharray="6 4"
               strokeWidth={3}
               dot={{ r: 3, strokeWidth: 2 }}
               activeDot={{ r: 5 }}

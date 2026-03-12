@@ -8,15 +8,15 @@ import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 export default function DashboardPage() {
   return (
     <div className="space-y-8">
+      <KpiGrid />
       <Card>
         <CardHeader>
-          <CardTitle>Leads y visitas agendadas</CardTitle>
+          <CardTitle>Actividad IA</CardTitle>
         </CardHeader>
         <div className="px-3 pb-3 sm:px-6 sm:pb-6">
           <LeadsChart />
         </div>
       </Card>
-      <KpiGrid />
       <PostVisitLeadsCard />
       <CurrentCallCard />
       <Card>

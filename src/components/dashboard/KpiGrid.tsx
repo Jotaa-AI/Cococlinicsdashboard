@@ -7,29 +7,49 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
-import { isoFromDaysAgo, isoStartOfToday } from "@/lib/utils/dates";
 import { useProfile } from "@/lib/supabase/useProfile";
+import type { Appointment, Call, Lead } from "@/lib/types";
+import {
+  getLeadClosedTimestamp,
+  getLeadKeyFromAppointment,
+  getLeadKeyFromCall,
+  getLeadKeyFromLead,
+  getReferenceTimestamp,
+  inRange,
+  isAiAppointment,
+  isLeadClosed,
+  isScheduledAiAppointment,
+  median,
+  parseNumeric,
+} from "@/lib/dashboard/aiMetrics";
 
-interface KpiValues {
-  leadsToday: number;
-  leads7d: number;
-  leads30d: number;
-  callToAppointmentRate: number;
-  calledLeadsMonth: number;
-  bookedLeadsMonth: number;
-  appointments: number;
-  noResponse: number;
-  callCostTotal: number;
-  costToClosedValueRate: number | null;
-  clientsClosedMonth: number;
-  clientsClosedValueMonth: number;
+interface DashboardMetrics {
+  leadsEntered: number;
+  leadsCalled: number;
+  leadsWithAiAppointment: number;
+  leadsClosedAi: number;
+  aiRevenue: number;
+  aiRevenueLeadCount: number;
+  totalCallCost: number;
+  roiMultiple: number | null;
+  costPerAiAppointment: number | null;
+  costPerAiClose: number | null;
+  noResponseCount: number;
+  noResponseRate: number;
+  medianLeadToCallMinutes: number | null;
+  medianCallToAiAppointmentMinutes: number | null;
 }
 
-const currencyPreciseFormatter = new Intl.NumberFormat("es-ES", {
+const currencyFormatter = new Intl.NumberFormat("es-ES", {
   style: "currency",
   currency: "EUR",
   minimumFractionDigits: 2,
-  maximumFractionDigits: 4,
+  maximumFractionDigits: 2,
+});
+
+const decimalFormatter = new Intl.NumberFormat("es-ES", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
 });
 
 const percentFormatter = new Intl.NumberFormat("es-ES", {
@@ -37,60 +57,51 @@ const percentFormatter = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 1,
 });
 
-function normalizePhone(value?: string | null) {
-  if (!value) return null;
-  const normalized = value.replace(/[^\d+]/g, "");
-  if (!normalized) return null;
-  if (normalized.startsWith("+")) return normalized;
-  return `+${normalized}`;
+function formatDuration(minutes: number | null) {
+  if (minutes === null || !Number.isFinite(minutes)) return "—";
+  if (minutes < 60) return `${Math.round(minutes)} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = Math.round(minutes % 60);
+  if (!remainingMinutes) return `${hours} h`;
+  if (hours < 24) return `${hours} h ${remainingMinutes} min`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  if (!remHours) return `${days} d`;
+  return `${days} d ${remHours} h`;
 }
 
-function getCallLeadKey(call: { lead_id?: string | null; phone?: string | null }) {
-  if (call.lead_id) return `lead:${call.lead_id}`;
-  const phone = normalizePhone(call.phone);
-  return phone ? `phone:${phone}` : null;
+function ratioFrom(previous: number, current: number) {
+  if (!previous) return 0;
+  return Number(((current / previous) * 100).toFixed(1));
 }
 
-function getAppointmentLeadKey(appointment: { lead_id?: string | null; lead_phone?: string | null }) {
-  if (appointment.lead_id) return `lead:${appointment.lead_id}`;
-  const phone = normalizePhone(appointment.lead_phone);
-  return phone ? `phone:${phone}` : null;
-}
-
-function getReferenceTimestamp(...dates: Array<string | null | undefined>) {
-  for (const value of dates) {
-    if (!value) continue;
-    const timestamp = new Date(value).getTime();
-    if (Number.isFinite(timestamp)) return timestamp;
-  }
-  return null;
+interface FunnelStep {
+  label: string;
+  value: number;
+  note: string;
 }
 
 export function KpiGrid() {
   const supabase = createSupabaseBrowserClient();
   const { profile } = useProfile();
-  const [selectedMonth, setSelectedMonth] = useState(() => startOfMonth(new Date()));
-  const [kpis, setKpis] = useState<KpiValues>({
-    leadsToday: 0,
-    leads7d: 0,
-    leads30d: 0,
-    callToAppointmentRate: 0,
-    calledLeadsMonth: 0,
-    bookedLeadsMonth: 0,
-    appointments: 0,
-    noResponse: 0,
-    callCostTotal: 0,
-    costToClosedValueRate: null,
-    clientsClosedMonth: 0,
-    clientsClosedValueMonth: 0,
-  });
-
   const clinicId = profile?.clinic_id;
-  const callCostPerMin = useMemo(() => {
-    if (!process.env.NEXT_PUBLIC_CALL_COST_PER_MIN) return null;
-    const parsed = Number(process.env.NEXT_PUBLIC_CALL_COST_PER_MIN);
-    return Number.isFinite(parsed) ? parsed : null;
-  }, []);
+  const [selectedMonth, setSelectedMonth] = useState(() => startOfMonth(new Date()));
+  const [metrics, setMetrics] = useState<DashboardMetrics>({
+    leadsEntered: 0,
+    leadsCalled: 0,
+    leadsWithAiAppointment: 0,
+    leadsClosedAi: 0,
+    aiRevenue: 0,
+    aiRevenueLeadCount: 0,
+    totalCallCost: 0,
+    roiMultiple: null,
+    costPerAiAppointment: null,
+    costPerAiClose: null,
+    noResponseCount: 0,
+    noResponseRate: 0,
+    medianLeadToCallMinutes: null,
+    medianCallToAiAppointmentMinutes: null,
+  });
 
   const monthLabel = useMemo(() => {
     const label = format(selectedMonth, "MMMM yyyy", { locale: es });
@@ -101,259 +112,285 @@ export function KpiGrid() {
     const start = startOfMonth(selectedMonth);
     const end = addMonths(start, 1);
     return {
-      startIso: start.toISOString(),
-      endIso: end.toISOString(),
+      start,
+      end,
+      startMs: start.getTime(),
+      endMs: end.getTime(),
     };
   }, [selectedMonth]);
 
-  const loadKpis = useCallback(async () => {
+  const loadMetrics = useCallback(async () => {
     if (!clinicId) return;
 
-    const today = isoStartOfToday();
-    const last7 = isoFromDaysAgo(7);
-    const last30 = isoFromDaysAgo(30);
-
-    const [
-      leadsToday,
-      leads7d,
-      leads30d,
-      noResponse,
-      appointments,
-      endedCallsInMonth,
-      appointmentsForConversion,
-      closedLeads,
-    ] =
-      await Promise.all([
+    const [leadsResult, callsResult, appointmentsResult] = await Promise.all([
       supabase
         .from("leads")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .gte("created_at", today),
-      supabase
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .gte("created_at", last7),
-      supabase
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .gte("created_at", last30),
-      supabase
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .eq("status", "no_response")
-        .gte("created_at", last30),
-      supabase
-        .from("appointments")
-        .select("id", { count: "exact", head: true })
-        .eq("clinic_id", clinicId)
-        .eq("status", "scheduled")
-        .gte("start_at", monthRange.startIso)
-        .lt("start_at", monthRange.endIso),
-      supabase
-        .from("calls")
-        .select("lead_id, phone, duration_sec, call_cost_eur, ended_at, started_at, created_at, outcome")
-        .eq("clinic_id", clinicId)
-        .eq("status", "ended")
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("appointments")
-        .select("lead_id, lead_phone, status, source_channel, created_at, start_at")
+        .select(
+          "id, phone, created_at, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at"
+        )
         .eq("clinic_id", clinicId),
       supabase
-        .from("leads")
-        .select("id, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at")
+        .from("calls")
+        .select("lead_id, phone, status, started_at, ended_at, created_at, call_cost_eur, outcome")
         .eq("clinic_id", clinicId)
-        .or("converted_to_client.eq.true,stage_key.eq.client_closed"),
+        .eq("status", "ended"),
+      supabase
+        .from("appointments")
+        .select("lead_id, lead_phone, status, source_channel, created_at, start_at, entry_type")
+        .eq("clinic_id", clinicId),
     ]);
 
-    const parseNumeric = (value: unknown): number | null => {
-      if (typeof value === "number" && Number.isFinite(value)) return value;
-      if (typeof value === "string") {
-        const parsed = Number(value);
-        if (Number.isFinite(parsed)) return parsed;
+    const leads = ((leadsResult.data || []) as Lead[]).filter(Boolean);
+    const calls = ((callsResult.data || []) as Call[]).filter(Boolean);
+    const appointments = ((appointmentsResult.data || []) as Appointment[]).filter(Boolean);
+
+    const leadsEnteredKeys = new Set<string>();
+    const leadCreatedAtByKey = new Map<string, number>();
+
+    for (const lead of leads) {
+      const key = getLeadKeyFromLead(lead);
+      if (!key) continue;
+      const createdAt = getReferenceTimestamp(lead.created_at);
+      if (createdAt !== null) {
+        const current = leadCreatedAtByKey.get(key);
+        if (current === undefined || createdAt < current) leadCreatedAtByKey.set(key, createdAt);
       }
-      return null;
-    };
+      if (inRange(createdAt, monthRange.startMs, monthRange.endMs)) leadsEnteredKeys.add(key);
+    }
 
-    const monthStartTs = new Date(monthRange.startIso).getTime();
-    const monthEndTs = new Date(monthRange.endIso).getTime();
-    const callsInSelectedMonth = (endedCallsInMonth.data || []).filter((row) => {
-      const timestamp = getReferenceTimestamp(row.ended_at, row.started_at, row.created_at);
-      return timestamp !== null && timestamp >= monthStartTs && timestamp < monthEndTs;
-    });
+    const callsInMonth = calls.filter((call) =>
+      inRange(getReferenceTimestamp(call.ended_at, call.started_at, call.created_at), monthRange.startMs, monthRange.endMs)
+    );
 
-    const totalCallCost = callsInSelectedMonth.reduce((acc, row) => {
-      const persistedCost = parseNumeric(row.call_cost_eur);
-      if (persistedCost !== null) return acc + persistedCost;
-      if (!callCostPerMin) return acc;
-      return acc + ((row.duration_sec || 0) / 60) * callCostPerMin;
-    }, 0);
+    const calledLeadKeys = new Set<string>();
+    const latestCallByLead = new Map<string, Call>();
+    const earliestCallByLead = new Map<string, number>();
 
-    const calledLeadKeys = new Set(
-      callsInSelectedMonth
-        .map((row) => getCallLeadKey(row))
+    for (const call of calls) {
+      const key = getLeadKeyFromCall(call);
+      const timestamp = getReferenceTimestamp(call.ended_at, call.started_at, call.created_at);
+      if (!key || timestamp === null) continue;
+      const currentFirst = earliestCallByLead.get(key);
+      if (currentFirst === undefined || timestamp < currentFirst) earliestCallByLead.set(key, timestamp);
+    }
+
+    let totalCallCost = 0;
+    for (const call of callsInMonth) {
+      const key = getLeadKeyFromCall(call);
+      const timestamp = getReferenceTimestamp(call.ended_at, call.started_at, call.created_at);
+      if (!key || timestamp === null) continue;
+      calledLeadKeys.add(key);
+      totalCallCost += parseNumeric(call.call_cost_eur) || 0;
+      const currentLatest = latestCallByLead.get(key);
+      const currentLatestTs = currentLatest
+        ? getReferenceTimestamp(currentLatest.ended_at, currentLatest.started_at, currentLatest.created_at)
+        : null;
+      if (currentLatestTs === null || timestamp > currentLatestTs) latestCallByLead.set(key, call);
+    }
+
+    const aiAppointmentsAll = appointments.filter((appointment) => isAiAppointment(appointment) && appointment.status !== "canceled");
+    const aiAttributionKeys = new Set(
+      aiAppointmentsAll
+        .map((appointment) => getLeadKeyFromAppointment(appointment))
         .filter((value): value is string => Boolean(value))
     );
 
-    const bookedLeadKeysFromAppointments = new Set(
-      (appointmentsForConversion.data || [])
-        .filter((appointment) => appointment.status === "scheduled" && appointment.source_channel === "call_ai")
-        .filter((appointment) => {
-          const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
-          return timestamp !== null && timestamp >= monthStartTs && timestamp < monthEndTs;
-        })
-        .map((appointment) => getAppointmentLeadKey(appointment))
+    const aiAppointmentsInMonth = appointments.filter((appointment) => {
+      if (!isScheduledAiAppointment(appointment)) return false;
+      const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
+      return inRange(timestamp, monthRange.startMs, monthRange.endMs);
+    });
+
+    const aiBookedLeadKeys = new Set(
+      aiAppointmentsInMonth
+        .map((appointment) => getLeadKeyFromAppointment(appointment))
         .filter((value): value is string => Boolean(value))
-        .filter((key) => calledLeadKeys.has(key))
     );
 
-    const bookedLeadKeysFromOutcomes = new Set(
-      callsInSelectedMonth
-        .filter((row) => row.outcome === "appointment_scheduled")
-        .map((row) => getCallLeadKey(row))
-        .filter((value): value is string => Boolean(value))
-        .filter((key) => calledLeadKeys.has(key))
-    );
+    for (const call of callsInMonth) {
+      if (call.outcome !== "appointment_scheduled") continue;
+      const key = getLeadKeyFromCall(call);
+      if (key) aiBookedLeadKeys.add(key);
+    }
 
-    const bookedLeadKeys = new Set([
-      ...Array.from(bookedLeadKeysFromAppointments),
-      ...Array.from(bookedLeadKeysFromOutcomes),
-    ]);
+    const aiClosedLeadKeys = new Set<string>();
+    let aiRevenue = 0;
 
-    const calledLeadsCount = calledLeadKeys.size;
-    const bookedLeadsCount = bookedLeadKeys.size;
-    const callToAppointmentRate = calledLeadsCount
-      ? Number(((bookedLeadsCount / calledLeadsCount) * 100).toFixed(1))
-      : 0;
-    const leadsClosedThisMonth = (closedLeads.data || []).filter((lead) => {
-      const referenceDate =
-        lead.converted_to_client && lead.converted_at
-          ? lead.converted_at
-          : lead.stage_key === "client_closed"
-            ? lead.updated_at
-            : null;
+    for (const lead of leads) {
+      if (!isLeadClosed(lead)) continue;
+      const key = getLeadKeyFromLead(lead);
+      if (!key || !aiAttributionKeys.has(key)) continue;
+      const closedTs = getReferenceTimestamp(getLeadClosedTimestamp(lead));
+      if (!inRange(closedTs, monthRange.startMs, monthRange.endMs)) continue;
+      const convertedValue = parseNumeric(lead.converted_value_eur);
+      if (!convertedValue || convertedValue <= 0) continue;
+      aiClosedLeadKeys.add(key);
+      aiRevenue += convertedValue;
+    }
 
-      if (!referenceDate) return false;
-      const timestamp = new Date(referenceDate).getTime();
-      return timestamp >= new Date(monthRange.startIso).getTime() && timestamp < new Date(monthRange.endIso).getTime();
+    const leadToCallDiffs: number[] = [];
+    for (const key of leadsEnteredKeys) {
+      const leadCreatedAt = leadCreatedAtByKey.get(key);
+      const firstCallAt = earliestCallByLead.get(key);
+      if (leadCreatedAt === undefined || firstCallAt === undefined) continue;
+      if (firstCallAt >= leadCreatedAt) leadToCallDiffs.push((firstCallAt - leadCreatedAt) / 60000);
+    }
+
+    const firstAiAppointmentByLead = new Map<string, number>();
+    for (const appointment of aiAppointmentsInMonth) {
+      const key = getLeadKeyFromAppointment(appointment);
+      const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
+      if (!key || timestamp === null) continue;
+      const current = firstAiAppointmentByLead.get(key);
+      if (current === undefined || timestamp < current) firstAiAppointmentByLead.set(key, timestamp);
+    }
+
+    const callToAppointmentDiffs: number[] = [];
+    for (const [key, appointmentTs] of firstAiAppointmentByLead.entries()) {
+      const firstCallAt = earliestCallByLead.get(key);
+      if (firstCallAt === undefined || appointmentTs < firstCallAt) continue;
+      callToAppointmentDiffs.push((appointmentTs - firstCallAt) / 60000);
+    }
+
+    const noResponseCount = Array.from(latestCallByLead.values()).filter(
+      (call) => call.outcome === "no_response"
+    ).length;
+
+    const calledLeadCount = calledLeadKeys.size;
+    const aiBookedLeadCount = aiBookedLeadKeys.size;
+    const aiClosedLeadCount = aiClosedLeadKeys.size;
+
+    setMetrics({
+      leadsEntered: leadsEnteredKeys.size,
+      leadsCalled: calledLeadCount,
+      leadsWithAiAppointment: aiBookedLeadCount,
+      leadsClosedAi: aiClosedLeadCount,
+      aiRevenue: Number(aiRevenue.toFixed(2)),
+      aiRevenueLeadCount: aiClosedLeadCount,
+      totalCallCost: Number(totalCallCost.toFixed(2)),
+      roiMultiple: totalCallCost > 0 ? Number((aiRevenue / totalCallCost).toFixed(1)) : null,
+      costPerAiAppointment:
+        aiBookedLeadCount > 0 ? Number((totalCallCost / aiBookedLeadCount).toFixed(2)) : null,
+      costPerAiClose: aiClosedLeadCount > 0 ? Number((totalCallCost / aiClosedLeadCount).toFixed(2)) : null,
+      noResponseCount,
+      noResponseRate: calledLeadCount > 0 ? Number(((noResponseCount / calledLeadCount) * 100).toFixed(1)) : 0,
+      medianLeadToCallMinutes: median(leadToCallDiffs),
+      medianCallToAiAppointmentMinutes: median(callToAppointmentDiffs),
     });
-    const clientsClosedMonth = leadsClosedThisMonth.length;
-    const clientsClosedValueMonth = leadsClosedThisMonth.reduce((acc, lead) => {
-      const parsedValue = parseNumeric(lead.converted_value_eur);
-      return acc + (parsedValue || 0);
-    }, 0);
-    const costToClosedValueRate =
-      clientsClosedValueMonth > 0 ? Number(((totalCallCost / clientsClosedValueMonth) * 100).toFixed(1)) : null;
-
-    setKpis({
-      leadsToday: leadsToday.count || 0,
-      leads7d: leads7d.count || 0,
-      leads30d: leads30d.count || 0,
-      callToAppointmentRate,
-      calledLeadsMonth: calledLeadsCount,
-      bookedLeadsMonth: bookedLeadsCount,
-      appointments: appointments.count || 0,
-      noResponse: noResponse.count || 0,
-      callCostTotal: Number(totalCallCost.toFixed(2)),
-      costToClosedValueRate,
-      clientsClosedMonth,
-      clientsClosedValueMonth: Number(clientsClosedValueMonth.toFixed(2)),
-    });
-  }, [supabase, clinicId, callCostPerMin, monthRange.startIso, monthRange.endIso]);
+  }, [clinicId, monthRange.endMs, monthRange.startMs, supabase]);
 
   useEffect(() => {
-    loadKpis();
-  }, [loadKpis]);
+    loadMetrics();
+  }, [loadMetrics]);
 
   useEffect(() => {
     if (!clinicId) return;
     const channel = supabase
-      .channel("kpi-updates")
+      .channel("ai-dashboard-metrics")
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "leads", filter: `clinic_id=eq.${clinicId}` },
-        loadKpis
+        loadMetrics
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "calls", filter: `clinic_id=eq.${clinicId}` },
-        loadKpis
+        loadMetrics
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "appointments", filter: `clinic_id=eq.${clinicId}` },
-        loadKpis
+        loadMetrics
       )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [supabase, clinicId, loadKpis]);
+  }, [clinicId, loadMetrics, supabase]);
 
-  const cards = [
+  const funnelSteps = useMemo<FunnelStep[]>(
+    () => [
+      { label: "Leads entrados", value: metrics.leadsEntered, note: monthLabel },
+      {
+        label: "Leads llamados",
+        value: metrics.leadsCalled,
+        note: `${percentFormatter.format(ratioFrom(metrics.leadsEntered, metrics.leadsCalled))}% del paso anterior`,
+      },
+      {
+        label: "Leads con cita IA",
+        value: metrics.leadsWithAiAppointment,
+        note: `${percentFormatter.format(ratioFrom(metrics.leadsCalled, metrics.leadsWithAiAppointment))}% del paso anterior`,
+      },
+      {
+        label: "Leads cerrados",
+        value: metrics.leadsClosedAi,
+        note: `${percentFormatter.format(ratioFrom(metrics.leadsWithAiAppointment, metrics.leadsClosedAi))}% del paso anterior`,
+      },
+    ],
+    [metrics, monthLabel]
+  );
+
+  const primaryCards = [
     {
-      label: "Leads totales (hoy)",
-      value: kpis.leadsToday,
-      note: "Últimas 24h",
-    },
-    {
-      label: "Leads 7 días",
-      value: kpis.leads7d,
-      note: "Última semana",
-    },
-    {
-      label: "Leads 30 días",
-      value: kpis.leads30d,
-      note: "Último mes",
-    },
-    {
-      label: "Llamadas -> cita",
-      value: `${percentFormatter.format(kpis.callToAppointmentRate)}%`,
+      label: "Ingresos atribuidos a IA",
+      value: currencyFormatter.format(metrics.aiRevenue),
       note: monthLabel,
-      detail: `${kpis.bookedLeadsMonth} leads agendados de ${kpis.calledLeadsMonth} leads llamados`,
+      detail:
+        metrics.aiRevenueLeadCount === 1
+          ? "1 lead cerrado con cita IA"
+          : `${metrics.aiRevenueLeadCount} leads cerrados con cita IA`,
     },
     {
-      label: "Visitas agendadas",
-      value: kpis.appointments,
+      label: "ROI IA",
+      value: metrics.roiMultiple === null ? "—" : `${decimalFormatter.format(metrics.roiMultiple)}x`,
       note: monthLabel,
-      detail: "Todas las citas",
+      detail:
+        metrics.roiMultiple === null
+          ? "Sin coste de llamadas en el mes"
+          : `${currencyFormatter.format(metrics.totalCallCost)} invertidos · ${currencyFormatter.format(metrics.aiRevenue)} cerrados`,
     },
+    {
+      label: "Coste por cita IA",
+      value: metrics.costPerAiAppointment === null ? "—" : currencyFormatter.format(metrics.costPerAiAppointment),
+      note: monthLabel,
+      detail:
+        metrics.leadsWithAiAppointment === 1
+          ? "1 lead con cita IA"
+          : `${metrics.leadsWithAiAppointment} leads con cita IA`,
+    },
+    {
+      label: "Coste por cierre IA",
+      value: metrics.costPerAiClose === null ? "—" : currencyFormatter.format(metrics.costPerAiClose),
+      note: monthLabel,
+      detail:
+        metrics.leadsClosedAi === 1 ? "1 lead cerrado atribuido a IA" : `${metrics.leadsClosedAi} leads cerrados atribuidos a IA`,
+    },
+  ];
+
+  const secondaryCards = [
     {
       label: "No responde",
-      value: kpis.noResponse,
-      note: "Últimos 30 días",
+      value: `${percentFormatter.format(metrics.noResponseRate)}%`,
+      note: monthLabel,
+      detail: `${metrics.noResponseCount} de ${metrics.leadsCalled} leads llamados`,
     },
     {
-      label: "Coste total llamadas",
-      value: currencyPreciseFormatter.format(kpis.callCostTotal),
-      note: monthLabel,
+      label: "Lead -> primera llamada",
+      value: formatDuration(metrics.medianLeadToCallMinutes),
+      note: "Mediana del periodo",
+      detail: "Tiempo desde alta del lead hasta la primera llamada", 
     },
     {
-      label: "Coste / valor cerrado",
-      value: kpis.costToClosedValueRate === null ? "—" : `${percentFormatter.format(kpis.costToClosedValueRate)}%`,
-      note: monthLabel,
-      detail:
-        kpis.costToClosedValueRate === null
-          ? "Sin valor cerrado en el mes"
-          : `${currencyPreciseFormatter.format(kpis.callCostTotal)} en llamadas sobre ${currencyPreciseFormatter.format(kpis.clientsClosedValueMonth)} cerrados`,
-    },
-    {
-      label: "Clientes cerrados",
-      value: currencyPreciseFormatter.format(kpis.clientsClosedValueMonth),
-      note: monthLabel,
-      detail:
-        kpis.clientsClosedMonth === 1
-          ? "1 lead cerrado"
-          : `${kpis.clientsClosedMonth} leads cerrados`,
+      label: "Primera llamada -> cita IA",
+      value: formatDuration(metrics.medianCallToAiAppointmentMinutes),
+      note: "Mediana del periodo",
+      detail: "Solo leads con cita creada por la IA de llamadas",
     },
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       <div className="flex items-center justify-end gap-2">
         <Button
           type="button"
@@ -375,8 +412,32 @@ export function KpiGrid() {
           <ChevronRight className="h-4 w-4" />
         </Button>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Embudo IA</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            {funnelSteps.map((step, index) => (
+              <div
+                key={step.label}
+                className="rounded-2xl border bg-gradient-to-br from-background via-background to-muted/30 p-4"
+              >
+                <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">
+                  Paso {index + 1}
+                </p>
+                <p className="mt-2 text-sm font-medium text-muted-foreground">{step.label}</p>
+                <p className="font-display mt-3 text-4xl font-semibold">{step.value}</p>
+                <p className="mt-2 text-xs font-medium text-foreground/75">{step.note}</p>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {cards.map((card) => (
+        {primaryCards.map((card) => (
           <Card key={card.label}>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">{card.label}</CardTitle>
@@ -384,7 +445,22 @@ export function KpiGrid() {
             <CardContent className="space-y-1">
               <p className="font-display text-2xl font-semibold sm:text-3xl">{card.value}</p>
               <p className="text-xs text-muted-foreground">{card.note}</p>
-              {"detail" in card && card.detail ? <p className="text-xs font-medium text-foreground/80">{card.detail}</p> : null}
+              <p className="text-xs font-medium text-foreground/80">{card.detail}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {secondaryCards.map((card) => (
+          <Card key={card.label}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">{card.label}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-1">
+              <p className="font-display text-2xl font-semibold sm:text-3xl">{card.value}</p>
+              <p className="text-xs text-muted-foreground">{card.note}</p>
+              <p className="text-xs font-medium text-foreground/80">{card.detail}</p>
             </CardContent>
           </Card>
         ))}
