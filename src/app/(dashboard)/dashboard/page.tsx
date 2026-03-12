@@ -11,7 +11,7 @@ export default function DashboardPage() {
       <KpiGrid />
       <Card>
         <CardHeader>
-          <CardTitle>Actividad IA</CardTitle>
+          <CardTitle>Leads y visitas agendadas</CardTitle>
         </CardHeader>
         <div className="px-3 pb-3 sm:px-6 sm:pb-6">
           <LeadsChart />
