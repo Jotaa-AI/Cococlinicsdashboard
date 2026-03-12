@@ -169,7 +169,7 @@ export function LeadsChart() {
 
     for (const appointment of appointments) {
       if (appointment.status !== "scheduled" || isInternalBlock(appointment)) continue;
-      const timestamp = getReferenceTimestamp(appointment.start_at, appointment.created_at);
+      const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
       if (!inRange(timestamp, rangeStartMs, rangeEndMs)) continue;
       const date = new Date(timestamp as number);
       const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);
