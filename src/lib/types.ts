@@ -92,6 +92,34 @@ export interface CalendarEvent {
   updated_at: string;
 }
 
+export interface WaThread {
+  id: string;
+  clinic_id: string;
+  lead_id: string | null;
+  phone_e164: string;
+  state: string;
+  last_outbound_message_id: string | null;
+  hitl_active: boolean;
+  updated_at: string | null;
+  created_at: string | null;
+}
+
+export interface WaMessage {
+  id: string;
+  thread_id: string;
+  clinic_id: string;
+  lead_id: string | null;
+  provider_message_id: string | null;
+  direction: "inbound" | "outbound";
+  role: "human" | "assistant" | "system";
+  text: string;
+  intent: string | null;
+  ab_variant: "A" | "B" | null;
+  delivery_status: string | null;
+  metadata: Json;
+  created_at: string;
+}
+
 export interface SystemState {
   id: string;
   clinic_id: string;
