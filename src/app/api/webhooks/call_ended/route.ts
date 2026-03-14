@@ -140,12 +140,26 @@ export async function POST(request: Request) {
       },
     });
 
+    const leadAttemptFlags: Record<string, boolean | string | null> = {
+      last_contact_at: endedAt,
+      next_action_at: nextActionAt,
+    };
+
+    if (outcome) {
+      if (attemptNo === 1) {
+        leadAttemptFlags.first_call_answered = outcome === "no_response" ? false : true;
+        leadAttemptFlags.second_call_answered = null;
+        leadAttemptFlags.whatsapp_handoff_needed = false;
+      } else {
+        leadAttemptFlags.first_call_answered = false;
+        leadAttemptFlags.second_call_answered = outcome === "no_response" ? false : true;
+        leadAttemptFlags.whatsapp_handoff_needed = outcome === "no_response";
+      }
+    }
+
     await supabase
       .from("leads")
-      .update({
-        last_contact_at: endedAt,
-        next_action_at: nextActionAt,
-      })
+      .update(leadAttemptFlags)
       .eq("clinic_id", clinicId)
       .eq("id", leadId);
   }

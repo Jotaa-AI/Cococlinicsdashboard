@@ -18,6 +18,9 @@ export interface Lead {
   whatsapp_blocked_reason: string | null;
   whatsapp_blocked_at: string | null;
   whatsapp_blocked_by_user_id: string | null;
+  first_call_answered: boolean | null;
+  second_call_answered: boolean | null;
+  whatsapp_handoff_needed: boolean;
   stage_key: string | null;
   ab_variant: "A" | "B" | null;
   last_contact_at: string | null;

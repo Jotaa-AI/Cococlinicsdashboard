@@ -88,6 +88,9 @@ create table if not exists leads (
   whatsapp_blocked_reason text,
   whatsapp_blocked_at timestamptz,
   whatsapp_blocked_by_user_id uuid references auth.users(id) on delete set null,
+  first_call_answered boolean,
+  second_call_answered boolean,
+  whatsapp_handoff_needed boolean not null default false,
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
