@@ -1,46 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  addMonths,
-  format,
-  startOfMonth,
-  startOfToday,
-  startOfWeek,
-  endOfWeek,
-} from "date-fns";
+import { addMonths, format, startOfMonth } from "date-fns";
 import { es } from "date-fns/locale";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
-import type { Appointment, Call, Lead } from "@/lib/types";
-import {
-  getLeadClosedTimestamp,
-  getLeadKeyFromAppointment,
-  getLeadKeyFromLead,
-  getReferenceTimestamp,
-  inRange,
-  isInternalBlock,
-  isLeadClosed,
-  parseNumeric,
-} from "@/lib/dashboard/aiMetrics";
+import type { DashboardSummary } from "@/lib/dashboard/serverMetrics";
 
 type LeadView = "day" | "week" | "month";
-
-interface DashboardKpis {
-  leadsDay: number;
-  leadsWeek: number;
-  leadsMonth: number;
-  callsMonth: number;
-  callCostMonth: number;
-  appointmentsMonth: number;
-  wonAppointmentsMonth: number;
-  wonRevenueMonth: number;
-  estimatedAppointmentsMonth: number;
-  estimatedRevenueMonth: number;
-}
 
 const currencyFormatter = new Intl.NumberFormat("es-ES", {
   style: "currency",
@@ -49,14 +19,8 @@ const currencyFormatter = new Intl.NumberFormat("es-ES", {
   maximumFractionDigits: 2,
 });
 
-const ESTIMATED_SERVICE_VALUE_EUR = 350;
-
 function upperFirst(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function isScheduledLeadAppointment(appointment: Appointment) {
-  return appointment.status === "scheduled" && !isInternalBlock(appointment);
 }
 
 export function KpiGrid() {
@@ -65,7 +29,7 @@ export function KpiGrid() {
   const clinicId = profile?.clinic_id;
   const [selectedMonth, setSelectedMonth] = useState(() => startOfMonth(new Date()));
   const [leadView, setLeadView] = useState<LeadView>("week");
-  const [kpis, setKpis] = useState<DashboardKpis>({
+  const [kpis, setKpis] = useState<DashboardSummary>({
     leadsDay: 0,
     leadsWeek: 0,
     leadsMonth: 0,
@@ -80,106 +44,20 @@ export function KpiGrid() {
 
   const monthLabel = useMemo(() => upperFirst(format(selectedMonth, "MMMM yyyy", { locale: es })), [selectedMonth]);
 
-  const monthRange = useMemo(() => {
-    const start = startOfMonth(selectedMonth);
-    const end = addMonths(start, 1);
-    return {
-      start,
-      end,
-      startMs: start.getTime(),
-      endMs: end.getTime(),
-    };
-  }, [selectedMonth]);
-
   const loadKpis = useCallback(async () => {
     if (!clinicId) return;
 
-    const [leadsResult, callsResult, appointmentsResult] = await Promise.all([
-      supabase
-        .from("leads")
-        .select(
-          "id, phone, created_at, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at"
-        )
-        .eq("clinic_id", clinicId),
-      supabase
-        .from("calls")
-        .select("lead_id, phone, status, ended_at, started_at, created_at, call_cost_eur")
-        .eq("clinic_id", clinicId)
-        .eq("status", "ended"),
-      supabase
-        .from("appointments")
-        .select("id, lead_id, lead_phone, status, start_at, created_at")
-        .eq("clinic_id", clinicId),
-    ]);
-
-    const leads = ((leadsResult.data || []) as Lead[]).filter(Boolean);
-    const calls = ((callsResult.data || []) as Call[]).filter(Boolean);
-    const appointments = ((appointmentsResult.data || []) as Appointment[]).filter(Boolean);
-
-    const todayStart = startOfToday().getTime();
-    const tomorrowStart = todayStart + 24 * 60 * 60 * 1000;
-    const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 }).getTime();
-    const nextWeekStart = endOfWeek(new Date(), { weekStartsOn: 1 }).getTime() + 1;
-
-    const leadsDay = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), todayStart, tomorrowStart)).length;
-    const leadsWeek = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), weekStart, nextWeekStart)).length;
-    const leadsMonth = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), monthRange.startMs, monthRange.endMs)).length;
-
-    const callsMonth = calls.filter((call) =>
-      inRange(getReferenceTimestamp(call.ended_at, call.started_at, call.created_at), monthRange.startMs, monthRange.endMs)
-    );
-
-    const callCostMonth = callsMonth.reduce((sum, call) => sum + (parseNumeric(call.call_cost_eur) || 0), 0);
-
-    const scheduledAppointmentsMonth = appointments.filter((appointment) => {
-      if (!isScheduledLeadAppointment(appointment)) return false;
-      return inRange(getReferenceTimestamp(appointment.start_at, appointment.created_at), monthRange.startMs, monthRange.endMs);
+    const response = await fetch(`/api/dashboard/summary?month=${encodeURIComponent(selectedMonth.toISOString())}`, {
+      cache: "no-store",
     });
 
-    const closedLeadKeys = new Set(
-      leads
-        .filter((lead) => {
-          if (!isLeadClosed(lead)) return false;
-          const closedAt = getReferenceTimestamp(getLeadClosedTimestamp(lead));
-          return inRange(closedAt, monthRange.startMs, monthRange.endMs);
-        })
-        .map((lead) => getLeadKeyFromLead(lead))
-        .filter((value): value is string => Boolean(value))
-    );
+    if (!response.ok) return;
 
-    let wonAppointmentsMonth = 0;
-    let wonRevenueMonth = 0;
-    let estimatedAppointmentsMonth = 0;
+    const payload = (await response.json().catch(() => null)) as DashboardSummary | null;
+    if (!payload) return;
 
-    const revenueCountedLeadKeys = new Set<string>();
-
-    for (const appointment of scheduledAppointmentsMonth) {
-      const leadKey = getLeadKeyFromAppointment(appointment);
-      if (leadKey && closedLeadKeys.has(leadKey)) {
-        wonAppointmentsMonth += 1;
-        if (!revenueCountedLeadKeys.has(leadKey)) {
-          const lead = leads.find((item) => getLeadKeyFromLead(item) === leadKey);
-          wonRevenueMonth += parseNumeric(lead?.converted_value_eur) || 0;
-          revenueCountedLeadKeys.add(leadKey);
-        }
-      } else {
-        estimatedAppointmentsMonth += 1;
-      }
-    }
-
-    setKpis({
-      leadsDay,
-      leadsWeek,
-      leadsMonth,
-      callsMonth: callsMonth.length,
-      callCostMonth: Number(callCostMonth.toFixed(2)),
-      appointmentsMonth: scheduledAppointmentsMonth.length,
-      wonAppointmentsMonth,
-      wonRevenueMonth: Number(wonRevenueMonth.toFixed(2)),
-      estimatedAppointmentsMonth,
-      estimatedRevenueMonth: Number((estimatedAppointmentsMonth * ESTIMATED_SERVICE_VALUE_EUR).toFixed(2)),
-    });
-  }, [clinicId, monthRange.endMs, monthRange.startMs, supabase]);
+    setKpis(payload);
+  }, [clinicId, selectedMonth]);
 
   useEffect(() => {
     loadKpis();
@@ -267,8 +145,8 @@ export function KpiGrid() {
       note: monthLabel,
       detail:
         kpis.estimatedAppointmentsMonth === 1
-          ? `1 cita pendiente x ${currencyFormatter.format(ESTIMATED_SERVICE_VALUE_EUR)}`
-          : `${kpis.estimatedAppointmentsMonth} citas pendientes x ${currencyFormatter.format(ESTIMATED_SERVICE_VALUE_EUR)}`,
+          ? "1 cita pendiente x 350,00 €"
+          : `${kpis.estimatedAppointmentsMonth} citas pendientes x 350,00 €`,
       accent: "text-primary",
     },
   ];
