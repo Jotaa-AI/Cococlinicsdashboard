@@ -5,17 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateBusyBlockRange } from "@/lib/calendar/slot-rules";
+import { toClinicDateInputValue, toClinicTimeInputValue, zonedDateTimeToUtcIso } from "@/lib/datetime/clinicTime";
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
-}
-
-function toDateInputValue(date: Date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function toTimeInputValue(date: Date) {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function nextHour(date: Date) {
@@ -32,7 +25,7 @@ function addMinutesToTime(value: string, minutes: number) {
   const date = new Date();
   date.setHours(hour, minute, 0, 0);
   date.setMinutes(date.getMinutes() + minutes);
-  return toTimeInputValue(date);
+  return toClinicTimeInputValue(date);
 }
 
 export function NewBusyBlockButton() {
@@ -40,9 +33,9 @@ export function NewBusyBlockButton() {
   const defaultStart = useMemo(() => nextHour(now), [now]);
 
   const [open, setOpen] = useState(false);
-  const [date, setDate] = useState(toDateInputValue(defaultStart));
-  const [startTime, setStartTime] = useState(toTimeInputValue(defaultStart));
-  const [endTime, setEndTime] = useState(addMinutesToTime(toTimeInputValue(defaultStart), SLOT_MINUTES));
+  const [date, setDate] = useState(toClinicDateInputValue(defaultStart));
+  const [startTime, setStartTime] = useState(toClinicTimeInputValue(defaultStart));
+  const [endTime, setEndTime] = useState(addMinutesToTime(toClinicTimeInputValue(defaultStart), SLOT_MINUTES));
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -56,9 +49,9 @@ export function NewBusyBlockButton() {
   }
 
   const resetForm = () => {
-    setDate(toDateInputValue(defaultStart));
-    setStartTime(toTimeInputValue(defaultStart));
-    setEndTime(addMinutesToTime(toTimeInputValue(defaultStart), SLOT_MINUTES));
+    setDate(toClinicDateInputValue(defaultStart));
+    setStartTime(toClinicTimeInputValue(defaultStart));
+    setEndTime(addMinutesToTime(toClinicTimeInputValue(defaultStart), SLOT_MINUTES));
     setReason("");
     setError(null);
   };
@@ -77,17 +70,12 @@ export function NewBusyBlockButton() {
       return;
     }
 
-    const startAt = new Date(`${date}T${startTime}:00`);
-    const endAt = new Date(`${date}T${endTime}:00`);
-
-    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
-      setError("Fecha u hora invalida.");
-      return;
-    }
+    const startIso = zonedDateTimeToUtcIso(date, startTime);
+    const endIso = zonedDateTimeToUtcIso(date, endTime);
 
     const slot = validateBusyBlockRange({
-      startAt: startAt.toISOString(),
-      endAt: endAt.toISOString(),
+      startAt: startIso,
+      endAt: endIso,
     });
 
     if (!slot.ok) {

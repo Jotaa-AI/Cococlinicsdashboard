@@ -5,17 +5,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
+import { toClinicDateInputValue, toClinicTimeInputValue, zonedDateTimeToUtcIso } from "@/lib/datetime/clinicTime";
 
 function pad(value: number) {
   return String(value).padStart(2, "0");
-}
-
-function toDateInputValue(date: Date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function toTimeInputValue(date: Date) {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function nextHour(date: Date) {
@@ -32,7 +25,7 @@ function addMinutesToTime(value: string, minutes: number) {
   const date = new Date();
   date.setHours(hour, minute, 0, 0);
   date.setMinutes(date.getMinutes() + minutes);
-  return toTimeInputValue(date);
+  return toClinicTimeInputValue(date);
 }
 
 export function NewAppointmentButton() {
@@ -42,8 +35,8 @@ export function NewAppointmentButton() {
   const [open, setOpen] = useState(false);
   const [patientName, setPatientName] = useState("");
   const [patientPhone, setPatientPhone] = useState("+34");
-  const [date, setDate] = useState(toDateInputValue(defaultStart));
-  const [startTime, setStartTime] = useState(toTimeInputValue(defaultStart));
+  const [date, setDate] = useState(toClinicDateInputValue(defaultStart));
+  const [startTime, setStartTime] = useState(toClinicTimeInputValue(defaultStart));
   const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,8 +45,8 @@ export function NewAppointmentButton() {
   const resetForm = () => {
     setPatientName("");
     setPatientPhone("+34");
-    setDate(toDateInputValue(defaultStart));
-    setStartTime(toTimeInputValue(defaultStart));
+    setDate(toClinicDateInputValue(defaultStart));
+    setStartTime(toClinicTimeInputValue(defaultStart));
     setReason("");
     setError(null);
   };
@@ -82,17 +75,12 @@ export function NewAppointmentButton() {
       return;
     }
 
-    const startAt = new Date(`${date}T${startTime}:00`);
-    if (Number.isNaN(startAt.getTime())) {
-      setError("Fecha u hora invalida.");
-      return;
-    }
-
-    const endAt = new Date(startAt.getTime() + SLOT_MINUTES * 60 * 1000);
+    const startIso = zonedDateTimeToUtcIso(date, startTime);
+    const endIso = zonedDateTimeToUtcIso(date, endTime);
 
     const slot = validateSlotRange({
-      startAt: startAt.toISOString(),
-      endAt: endAt.toISOString(),
+      startAt: startIso,
+      endAt: endIso,
     });
 
     if (!slot.ok) {

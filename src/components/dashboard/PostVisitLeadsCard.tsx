@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CelebrationOverlay } from "@/components/ui/celebration-overlay";
+import { formatClinicDateTime } from "@/lib/datetime/clinicTime";
 
 interface PostVisitLeadRow {
   appointment: Appointment;
@@ -52,15 +53,7 @@ function madridDateKey(value: string | Date) {
 }
 
 function formatVisitDate(value: string) {
-  const date = new Date(value);
-  return date.toLocaleString("es-ES", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
+  return formatClinicDateTime(value);
 }
 
 export function PostVisitLeadsCard() {

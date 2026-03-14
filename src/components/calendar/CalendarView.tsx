@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
+import { CLINIC_TIMEZONE, formatClinicDateTime, toClinicDateInputValue, toClinicTimeInputValue, zonedDateTimeToUtcIso } from "@/lib/datetime/clinicTime";
 
 type EntryType = "appointment" | "busy_block";
 
@@ -53,20 +54,12 @@ function pad(value: number) {
   return String(value).padStart(2, "0");
 }
 
-function toDateInputValue(date: Date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-}
-
-function toTimeInputValue(date: Date) {
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 function addMinutesToTime(value: string, minutes: number) {
   const [hour, minute] = value.split(":").map(Number);
   const date = new Date();
   date.setHours(hour, minute, 0, 0);
   date.setMinutes(date.getMinutes() + minutes);
-  return toTimeInputValue(date);
+  return toClinicTimeInputValue(date);
 }
 
 function normalizeEsPhone(rawPhone: string) {
@@ -130,9 +123,9 @@ function getDraftFromDates(start: Date, end?: Date): DraftEntryState {
 
   return {
     type: "appointment",
-    date: toDateInputValue(safeStart),
-    startTime: toTimeInputValue(safeStart),
-    endTime: toTimeInputValue(safeEnd),
+    date: toClinicDateInputValue(safeStart),
+    startTime: toClinicTimeInputValue(safeStart),
+    endTime: toClinicTimeInputValue(safeEnd),
     title: "",
     leadName: "",
     leadPhone: "",
@@ -279,9 +272,9 @@ export function CalendarView() {
     setDraftEntry({
       sourceId: String(arg.event.extendedProps.sourceId),
       type: entryType,
-      date: toDateInputValue(start),
-      startTime: toTimeInputValue(start),
-      endTime: toTimeInputValue(end),
+      date: toClinicDateInputValue(start),
+      startTime: toClinicTimeInputValue(start),
+      endTime: toClinicTimeInputValue(end),
       title: rawTitle,
       leadName: entryType === "appointment" ? String(arg.event.extendedProps.leadName || fallbackLeadName || "") : "",
       leadPhone: entryType === "appointment" ? String(arg.event.extendedProps.leadPhone || "") : "",
@@ -307,18 +300,13 @@ export function CalendarView() {
     if (!draftEntry) return;
 
     setFormError(null);
-    const startAt = new Date(`${draftEntry.date}T${draftEntry.startTime}:00`);
-    const endAt = new Date(`${draftEntry.date}T${draftEntry.endTime}:00`);
-
-    if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime())) {
-      setFormError("Fecha u hora no válida.");
-      return;
-    }
+    const startIso = zonedDateTimeToUtcIso(draftEntry.date, draftEntry.startTime);
+    const endIso = zonedDateTimeToUtcIso(draftEntry.date, draftEntry.endTime);
 
     const validator = draftEntry.type === "busy_block" ? validateBusyBlockRange : validateSlotRange;
     const slot = validator({
-      startAt: startAt.toISOString(),
-      endAt: endAt.toISOString(),
+      startAt: startIso,
+      endAt: endIso,
     });
 
     if (!slot.ok) {
@@ -525,6 +513,7 @@ export function CalendarView() {
         locales={[esLocale]}
         locale="es"
         initialView="dayGridMonth"
+        timeZone={CLINIC_TIMEZONE}
         height="auto"
         events={events}
         selectable
@@ -592,14 +581,7 @@ export function CalendarView() {
                     {appointment.lead_name || appointment.title || "Cita sin nombre"}
                   </p>
                   <p className="text-xs text-slate-600">
-                    {new Date(appointment.start_at).toLocaleString("es-ES", {
-                      day: "2-digit",
-                      month: "2-digit",
-                      year: "numeric",
-                      hour: "2-digit",
-                      minute: "2-digit",
-                      hour12: false,
-                    })}{" "}
+                    {formatClinicDateTime(appointment.start_at)}{" "}
                     · {appointment.title || "Valoración gratuita"}
                   </p>
                   <p className="text-xs text-slate-500">
