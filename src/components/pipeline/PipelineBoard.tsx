@@ -364,7 +364,12 @@ export function PipelineBoard() {
   }, [visibleStages]);
 
   const resolveStageKey = useCallback(
-    (lead: Pick<Lead, "stage_key" | "status">) => {
+    (lead: Pick<Lead, "stage_key" | "status" | "intents">) => {
+      if (lead.status === "no_response") {
+        if (lead.intents === "1" && stageMap.has("second_call_scheduled")) return "second_call_scheduled";
+        if (lead.intents === "2" && stageMap.has("no_answer_second_call")) return "no_answer_second_call";
+      }
+
       const current = lead.stage_key || "";
       if (current && stageMap.has(current)) return current;
 
