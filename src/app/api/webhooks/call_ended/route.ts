@@ -157,6 +157,8 @@ export async function POST(request: Request) {
       }
     }
 
+    leadAttemptFlags.intents = attemptNo > 1 ? "2" : "1";
+
     await supabase
       .from("leads")
       .update(leadAttemptFlags)

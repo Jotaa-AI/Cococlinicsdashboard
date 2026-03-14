@@ -8,6 +8,7 @@ export interface Lead {
   treatment: string | null;
   source: string | null;
   status: string;
+  intents: "1" | "2" | null;
   converted_to_client: boolean;
   converted_value_eur: number | string | null;
   converted_service_name: string | null;

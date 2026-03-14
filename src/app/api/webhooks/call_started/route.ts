@@ -66,7 +66,10 @@ export async function POST(request: Request) {
 
     await supabase
       .from("leads")
-      .update({ last_contact_at: new Date().toISOString() })
+      .update({
+        last_contact_at: new Date().toISOString(),
+        intents: attemptNo > 1 ? "2" : "1",
+      })
       .eq("clinic_id", clinicId)
       .eq("id", leadId);
   }

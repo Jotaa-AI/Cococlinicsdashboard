@@ -28,6 +28,13 @@ END $$;
 
 DO $$
 BEGIN
+  CREATE TYPE lead_intent AS ENUM ('1', '2');
+EXCEPTION
+  WHEN duplicate_object THEN NULL;
+END $$;
+
+DO $$
+BEGIN
   CREATE TYPE appointment_status AS ENUM ('scheduled', 'canceled', 'done');
 EXCEPTION
   WHEN duplicate_object THEN NULL;
@@ -78,6 +85,7 @@ create table if not exists leads (
   treatment text,
   source text default 'meta',
   status lead_status not null default 'new',
+  intents lead_intent,
   converted_to_client boolean not null default false,
   converted_value_eur numeric(10,2),
   converted_service_name text,
@@ -99,6 +107,7 @@ create unique index if not exists leads_phone_unique on leads (clinic_id, phone)
 create index if not exists leads_phone_idx on leads (phone);
 create index if not exists leads_created_at_idx on leads (created_at);
 create index if not exists leads_status_idx on leads (status);
+create index if not exists leads_status_intents_idx on leads (clinic_id, status, intents);
 create index if not exists leads_converted_at_idx on leads (clinic_id, converted_at) where converted_to_client = true;
 create index if not exists leads_contacto_futuro_idx on leads (clinic_id, contacto_futuro) where contacto_futuro is not null;
 create index if not exists leads_whatsapp_blocked_idx on leads (clinic_id, whatsapp_blocked);
