@@ -47,7 +47,8 @@ export function KpiGrid() {
   const loadKpis = useCallback(async () => {
     if (!clinicId) return;
 
-    const response = await fetch(`/api/dashboard/summary?month=${encodeURIComponent(selectedMonth.toISOString())}`, {
+    const monthParam = `${selectedMonth.getFullYear()}-${String(selectedMonth.getMonth() + 1).padStart(2, "0")}`;
+    const response = await fetch(`/api/dashboard/summary?month=${encodeURIComponent(monthParam)}`, {
       cache: "no-store",
     });
 

@@ -8,6 +8,14 @@ export const dynamic = "force-dynamic";
 
 function parseMonth(value: string | null) {
   if (!value) return new Date();
+
+  const yearMonthMatch = value.match(/^(\d{4})-(\d{2})$/);
+  if (yearMonthMatch) {
+    const year = Number(yearMonthMatch[1]);
+    const month = Number(yearMonthMatch[2]) - 1;
+    return new Date(year, month, 1);
+  }
+
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 }
