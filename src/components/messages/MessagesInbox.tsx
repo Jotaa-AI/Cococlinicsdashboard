@@ -2,15 +2,18 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, MessageSquare, Phone, RefreshCw } from "lucide-react";
+import { Bot, MessageSquare, Phone, RefreshCw, Search, ShieldAlert, UserRound } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import { normalizeEsPhone } from "@/lib/leads/resolveLead";
 import type { Call, Lead, WaMessage, WaThread } from "@/lib/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils/cn";
+
+const CLINIC_TZ = "Europe/Madrid";
 
 interface ThreadListItem extends WaThread {
   lead: Pick<Lead, "id" | "full_name" | "phone" | "treatment"> | null;
@@ -24,6 +27,19 @@ interface InitialCallContext {
   lead: Pick<Lead, "full_name" | "phone" | "treatment"> | null;
 }
 
+interface DaySeparatorItem {
+  kind: "separator";
+  key: string;
+  label: string;
+}
+
+interface MessageItem {
+  kind: "message";
+  message: WaMessage;
+}
+
+type ChatItem = DaySeparatorItem | MessageItem;
+
 function formatDateTime(value?: string | null) {
   if (!value) return "—";
   return new Date(value).toLocaleString("es-ES", {
@@ -33,10 +49,11 @@ function formatDateTime(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone: CLINIC_TZ,
   });
 }
 
-function formatCompactDate(value?: string | null) {
+function formatSidebarTime(value?: string | null) {
   if (!value) return "—";
   return new Date(value).toLocaleString("es-ES", {
     day: "2-digit",
@@ -44,13 +61,45 @@ function formatCompactDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone: CLINIC_TZ,
   });
 }
 
+function formatMessageTime(value?: string | null) {
+  if (!value) return "—";
+  return new Date(value).toLocaleTimeString("es-ES", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+    timeZone: CLINIC_TZ,
+  });
+}
+
+function formatDayLabel(value?: string | null) {
+  if (!value) return "Sin fecha";
+  return new Date(value).toLocaleDateString("es-ES", {
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    timeZone: CLINIC_TZ,
+  });
+}
+
+function getDayKey(value?: string | null) {
+  if (!value) return "sin-fecha";
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: CLINIC_TZ,
+  }).format(new Date(value));
+}
+
 function getParticipantLabel(message: WaMessage) {
-  if (message.role === "assistant") return "Agente WhatsApp";
+  if (message.role === "assistant") return "Agente IA";
   if (message.role === "system") return "Sistema";
-  return message.direction === "inbound" ? "Lead" : "Clínica";
+  return message.direction === "inbound" ? "Lead" : "Equipo";
 }
 
 function formatStateLabel(state?: string | null) {
@@ -66,6 +115,27 @@ function getThreadPreview(thread: ThreadListItem) {
   return thread.lastMessageText || "Sin mensajes todavía";
 }
 
+function buildChatItems(messages: WaMessage[]) {
+  const items: ChatItem[] = [];
+  let currentDayKey: string | null = null;
+
+  for (const message of messages) {
+    const dayKey = getDayKey(message.created_at);
+    if (dayKey !== currentDayKey) {
+      currentDayKey = dayKey;
+      items.push({
+        kind: "separator",
+        key: `${dayKey}-${message.id}`,
+        label: formatDayLabel(message.created_at),
+      });
+    }
+
+    items.push({ kind: "message", message });
+  }
+
+  return items;
+}
+
 export function MessagesInbox() {
   const supabase = createSupabaseBrowserClient();
   const { profile, loading: profileLoading } = useProfile();
@@ -79,6 +149,7 @@ export function MessagesInbox() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [refreshTick, setRefreshTick] = useState(0);
   const [togglingHitl, setTogglingHitl] = useState(false);
+  const [search, setSearch] = useState("");
 
   const loadThreads = useCallback(async () => {
     if (!clinicId) return;
@@ -123,8 +194,7 @@ export function MessagesInbox() {
         .select("id, thread_id, text, created_at")
         .eq("clinic_id", clinicId)
         .in("thread_id", threadIds)
-        .order("created_at", { ascending: false })
-        
+        .order("created_at", { ascending: false }),
     ]);
 
     const leadById = new Map<string, Pick<Lead, "id" | "full_name" | "phone" | "treatment">>();
@@ -152,7 +222,10 @@ export function MessagesInbox() {
 
     const nextThreads: ThreadListItem[] = typedThreads.map((thread) => {
       const normalizedPhone = normalizeEsPhone(thread.phone_e164);
-      const lead = (thread.lead_id ? leadById.get(thread.lead_id) : null) || (normalizedPhone ? leadByPhone.get(normalizedPhone) : null) || null;
+      const lead =
+        (thread.lead_id ? leadById.get(thread.lead_id) : null) ||
+        (normalizedPhone ? leadByPhone.get(normalizedPhone) : null) ||
+        null;
       const lastMessage = lastMessageByThread.get(thread.id);
       return {
         ...thread,
@@ -172,6 +245,26 @@ export function MessagesInbox() {
     () => threads.find((thread) => thread.id === selectedThreadId) || null,
     [selectedThreadId, threads]
   );
+
+  const filteredThreads = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    if (!term) return threads;
+    return threads.filter((thread) => {
+      const haystack = [
+        getThreadDisplayName(thread),
+        thread.lead?.phone,
+        thread.phone_e164,
+        thread.lead?.treatment,
+        thread.lastMessageText,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(term);
+    });
+  }, [search, threads]);
+
+  const chatItems = useMemo(() => buildChatItems(messages), [messages]);
 
   const toggleHitl = useCallback(async () => {
     if (!selectedThread) return;
@@ -279,83 +372,96 @@ export function MessagesInbox() {
   }, [clinicId, loadThreadDetail, loadThreads, supabase]);
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-border pb-4">
+    <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <Card className="overflow-hidden rounded-[28px] border-border/70 bg-white">
+        <div className="border-b border-border/70 bg-[#f6f2eb] p-5">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <CardTitle>Hilos</CardTitle>
+              <h2 className="text-lg font-semibold text-foreground">Conversaciones abiertas</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Conversaciones del agente con leads por WhatsApp.
+                Aquí iremos viendo todo lo que entra y sale por WhatsApp.
               </p>
             </div>
             <Button type="button" variant="outline" size="sm" onClick={() => setRefreshTick((value) => value + 1)}>
               <RefreshCw className="h-4 w-4" />
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="max-h-[72vh] overflow-y-auto">
-            {profileLoading || loadingThreads ? (
-              <div className="p-4 text-sm text-muted-foreground">Cargando hilos...</div>
-            ) : threads.length ? (
-              <div className="divide-y divide-border">
-                {threads.map((thread) => {
-                  const active = thread.id === selectedThreadId;
-                  return (
-                    <button
-                      key={thread.id}
-                      type="button"
-                      onClick={() => setSelectedThreadId(thread.id)}
-                      className={cn(
-                        "flex w-full flex-col gap-2 px-4 py-4 text-left transition",
-                        active ? "bg-primary/8" : "hover:bg-muted/50"
-                      )}
-                    >
+          <div className="relative mt-4">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Buscar por lead, teléfono o texto..."
+              className="pl-9"
+            />
+          </div>
+        </div>
+
+        <div className="max-h-[76vh] overflow-y-auto bg-white">
+          {profileLoading || loadingThreads ? (
+            <div className="p-5 text-sm text-muted-foreground">Cargando conversaciones...</div>
+          ) : filteredThreads.length ? (
+            <div className="divide-y divide-border/70">
+              {filteredThreads.map((thread) => {
+                const active = thread.id === selectedThreadId;
+                return (
+                  <button
+                    key={thread.id}
+                    type="button"
+                    onClick={() => setSelectedThreadId(thread.id)}
+                    className={cn(
+                      "flex w-full items-start gap-3 px-4 py-4 text-left transition",
+                      active ? "bg-[#efeae2]" : "hover:bg-muted/40"
+                    )}
+                  >
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                      <UserRound className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
                           <p className="truncate text-sm font-semibold text-foreground">{getThreadDisplayName(thread)}</p>
                           <p className="truncate text-xs text-muted-foreground">{thread.lead?.phone || thread.phone_e164}</p>
                         </div>
-                        <div className="flex shrink-0 items-center gap-2">
-                          {thread.hitl_active ? <Badge variant="warning">HITL</Badge> : null}
-                          <Badge variant="soft">{formatStateLabel(thread.state)}</Badge>
-                        </div>
+                        <div className="shrink-0 text-[11px] text-muted-foreground">{formatSidebarTime(thread.lastMessageAt || thread.updated_at)}</div>
                       </div>
-                      <p className="line-clamp-2 text-xs text-muted-foreground">{getThreadPreview(thread)}</p>
-                      <div className="flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                        <span>{thread.messagesCount} mensajes</span>
-                        <span>{formatCompactDate(thread.lastMessageAt || thread.updated_at)}</span>
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{getThreadPreview(thread)}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {thread.lead?.treatment ? <Badge variant="soft">{thread.lead.treatment}</Badge> : null}
+                        {thread.hitl_active ? <Badge variant="warning">HITL</Badge> : <Badge variant="success">IA activa</Badge>}
+                        <Badge variant="soft">{thread.messagesCount} mensajes</Badge>
                       </div>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="p-6 text-sm text-muted-foreground">Todavía no hay conversaciones registradas.</div>
-            )}
-          </div>
-        </CardContent>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="p-6 text-sm text-muted-foreground">Todavía no hay conversaciones registradas.</div>
+          )}
+        </div>
       </Card>
 
-      <div className="space-y-4 min-w-0">
-        <Card>
-          <CardHeader className="border-b border-border pb-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <CardTitle>{selectedThread ? getThreadDisplayName(selectedThread) : "Mensajes"}</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {selectedThread
-                    ? `${selectedThread.lead?.phone || selectedThread.phone_e164} · Actualizado ${formatDateTime(
-                        selectedThread.updated_at
-                      )}`
-                    : "Selecciona un hilo para ver la llamada inicial y los mensajes de WhatsApp."}
-                </p>
-              </div>
-              {selectedThread ? (
+      <Card className="overflow-hidden rounded-[28px] border-border/70 bg-[#efeae2]">
+        {selectedThread ? (
+          <>
+            <div className="border-b border-border/70 bg-[#f6f2eb] px-5 py-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-center gap-3">
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white text-primary shadow-soft">
+                    <UserRound className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-base font-semibold text-foreground">{getThreadDisplayName(selectedThread)}</p>
+                    <p className="truncate text-sm text-muted-foreground">
+                      {selectedThread.lead?.phone || selectedThread.phone_e164}
+                      {selectedThread.lead?.treatment ? ` · ${selectedThread.lead.treatment}` : ""}
+                    </p>
+                  </div>
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  {selectedThread.hitl_active ? <Badge variant="warning">HITL activo</Badge> : <Badge variant="success">IA activa</Badge>}
                   <Badge variant="soft">{formatStateLabel(selectedThread.state)}</Badge>
+                  {selectedThread.hitl_active ? <Badge variant="warning">HITL activo</Badge> : <Badge variant="success">IA activa</Badge>}
                   <Button
                     type="button"
                     variant={selectedThread.hitl_active ? "default" : "outline"}
@@ -367,136 +473,141 @@ export function MessagesInbox() {
                     {selectedThread.hitl_active ? "Conectar IA" : "Detener IA"}
                   </Button>
                 </div>
-              ) : null}
+              </div>
             </div>
-          </CardHeader>
-          <CardContent className="space-y-4 pt-6">
-            {selectedThread ? (
-              <>
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-                  <div className="rounded-2xl border border-border bg-muted/20 p-4">
-                    <div className="mb-3 flex items-center gap-2">
-                      <Phone className="h-4 w-4 text-primary" />
+
+            <div className="grid min-h-[76vh] grid-rows-[auto_1fr_auto]">
+              <div className="border-b border-border/70 bg-white/80 px-5 py-4">
+                <div className="flex items-start gap-3 rounded-2xl border border-border/70 bg-white px-4 py-4 shadow-soft">
+                  <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Phone className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
                       <p className="text-sm font-semibold text-foreground">Llamada inicial IA</p>
+                      {initialCall.call ? <Badge variant="soft">{initialCall.call.outcome || "sin outcome"}</Badge> : null}
                     </div>
                     {initialCall.call ? (
-                      <div className="space-y-3 text-sm">
-                        <div className="flex flex-wrap gap-3 text-muted-foreground">
-                          <span>{formatDateTime(initialCall.call.started_at || initialCall.call.created_at)}</span>
-                          <span>Outcome: {initialCall.call.outcome || "—"}</span>
-                          <span>Duración: {initialCall.call.duration_sec ? `${Math.round(initialCall.call.duration_sec / 60)} min` : "—"}</span>
-                        </div>
-                        {initialCall.lead?.treatment ? (
-                          <p className="text-muted-foreground">Tratamiento: {initialCall.lead.treatment}</p>
-                        ) : null}
-                        <p className="rounded-xl border border-border bg-background px-3 py-3 text-sm text-foreground/90">
+                      <>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {formatDateTime(initialCall.call.started_at || initialCall.call.created_at)}
+                          {" · "}
+                          {initialCall.call.duration_sec ? `${Math.round(initialCall.call.duration_sec / 60)} min` : "duración no disponible"}
+                        </p>
+                        <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-foreground/90">
                           {initialCall.call.summary || initialCall.call.transcript || "Sin resumen ni transcripción disponible."}
                         </p>
-                        <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                          <Link href={`/calls/${initialCall.call.id}`} className="font-medium text-primary hover:underline">
-                            Ver detalle completo de la llamada
-                          </Link>
-                        </div>
-                      </div>
+                        <Link
+                          href={`/calls/${initialCall.call.id}`}
+                          className="mt-3 inline-flex text-xs font-medium text-primary hover:underline"
+                        >
+                          Ver detalle completo de la llamada
+                        </Link>
+                      </>
                     ) : (
-                      <p className="text-sm text-muted-foreground">No hay llamada inicial registrada para este lead.</p>
+                      <p className="mt-2 text-sm text-muted-foreground">No hay llamada inicial registrada para este lead.</p>
                     )}
                   </div>
-
-                  <div className="rounded-2xl border border-border bg-white p-4">
-                    <div className="mb-3 flex items-center gap-2">
-                      <MessageSquare className="h-4 w-4 text-primary" />
-                      <p className="text-sm font-semibold text-foreground">Resumen del hilo</p>
-                    </div>
-                    <dl className="grid gap-3 text-sm">
-                      <div>
-                        <dt className="text-muted-foreground">Lead</dt>
-                        <dd className="font-medium text-foreground">{getThreadDisplayName(selectedThread)}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">Teléfono</dt>
-                        <dd className="font-medium text-foreground">{selectedThread.lead?.phone || selectedThread.phone_e164}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">Mensajes</dt>
-                        <dd className="font-medium text-foreground">{messages.length}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">Última actividad</dt>
-                        <dd className="font-medium text-foreground">{formatDateTime(selectedThread.updated_at)}</dd>
-                      </div>
-                      <div>
-                        <dt className="text-muted-foreground">Estado IA</dt>
-                        <dd className="font-medium text-foreground">{selectedThread.hitl_active ? "Pausada por equipo" : "Activa"}</dd>
-                      </div>
-                    </dl>
-                  </div>
                 </div>
+              </div>
 
-                <div className="rounded-2xl border border-border bg-white">
-                  <div className="border-b border-border px-4 py-4">
-                    <p className="text-sm font-semibold text-foreground">Mensajes de WhatsApp</p>
-                    <p className="text-xs text-muted-foreground">
-                      Aquí se muestra la conversación del agente con el lead, separada de la llamada inicial.
-                    </p>
-                  </div>
-                  <div className="max-h-[56vh] space-y-3 overflow-y-auto px-4 py-4">
-                    {loadingMessages ? (
-                      <p className="text-sm text-muted-foreground">Cargando mensajes...</p>
-                    ) : messages.length ? (
-                      messages.map((message) => {
-                        const isOutbound = message.direction === "outbound";
-                        const isSystem = message.role === "system";
+              <div
+                className="max-h-[56vh] overflow-y-auto px-5 py-5"
+                style={{
+                  backgroundImage:
+                    "radial-gradient(circle at 1px 1px, rgba(10, 39, 76, 0.06) 1px, transparent 0)",
+                  backgroundSize: "18px 18px",
+                }}
+              >
+                {loadingMessages ? (
+                  <p className="text-sm text-muted-foreground">Cargando mensajes...</p>
+                ) : chatItems.length ? (
+                  <div className="space-y-3">
+                    {chatItems.map((item) => {
+                      if (item.kind === "separator") {
                         return (
-                          <div
-                            key={message.id}
-                            className={cn(
-                              "flex",
-                              isSystem ? "justify-center" : isOutbound ? "justify-end" : "justify-start"
-                            )}
-                          >
-                            <div
-                              className={cn(
-                                "max-w-[80%] rounded-2xl px-4 py-3 text-sm shadow-sm",
-                                isSystem
-                                  ? "border border-border bg-muted/40 text-muted-foreground"
-                                  : isOutbound
-                                    ? "bg-primary text-primary-foreground"
-                                    : "border border-border bg-background text-foreground"
-                              )}
-                            >
-                              <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] opacity-80">
-                                <span>{getParticipantLabel(message)}</span>
-                                <span>·</span>
-                                <span>{formatDateTime(message.created_at)}</span>
-                              </div>
-                              <p className="whitespace-pre-wrap leading-6">{message.text}</p>
-                              {message.intent ? (
-                                <div className="mt-2 flex items-center gap-2">
-                                  <Badge variant={isOutbound ? "default" : "soft"}>{message.intent}</Badge>
-                                  {message.delivery_status ? <span className="text-[11px] opacity-80">{message.delivery_status}</span> : null}
-                                </div>
-                              ) : message.delivery_status ? (
-                                <div className="mt-2 text-[11px] opacity-80">{message.delivery_status}</div>
-                              ) : null}
+                          <div key={item.key} className="flex justify-center py-2">
+                            <div className="rounded-full border border-border/70 bg-white/90 px-4 py-1 text-[11px] font-medium text-muted-foreground shadow-soft">
+                              {item.label}
                             </div>
                           </div>
                         );
-                      })
-                    ) : (
-                      <p className="text-sm text-muted-foreground">Todavía no hay mensajes de WhatsApp en este hilo.</p>
-                    )}
+                      }
+
+                      const message = item.message;
+                      const isOutbound = message.direction === "outbound";
+                      const isSystem = message.role === "system";
+
+                      return (
+                        <div
+                          key={message.id}
+                          className={cn("flex", isSystem ? "justify-center" : isOutbound ? "justify-end" : "justify-start")}
+                        >
+                          <div
+                            className={cn(
+                              "max-w-[82%] rounded-[22px] px-4 py-3 text-sm shadow-soft",
+                              isSystem
+                                ? "border border-border bg-white/90 text-muted-foreground"
+                                : isOutbound
+                                  ? "rounded-br-md bg-[#d9fdd3] text-foreground"
+                                  : "rounded-bl-md border border-border/70 bg-white text-foreground"
+                            )}
+                          >
+                            <div className="mb-2 flex items-center gap-2 text-[11px] text-muted-foreground">
+                              <span className="font-medium uppercase tracking-[0.16em]">{getParticipantLabel(message)}</span>
+                              <span>·</span>
+                              <span>{formatMessageTime(message.created_at)}</span>
+                            </div>
+                            <p className="whitespace-pre-wrap leading-6">{message.text}</p>
+                            {(message.intent || message.delivery_status) && !isSystem ? (
+                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                {message.intent ? <Badge variant="soft">{message.intent}</Badge> : null}
+                                {message.delivery_status ? <span className="text-[11px] text-muted-foreground">{message.delivery_status}</span> : null}
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex h-full items-center justify-center">
+                    <div className="rounded-2xl border border-dashed border-border/70 bg-white/85 px-6 py-5 text-center text-sm text-muted-foreground">
+                      Todavía no hay mensajes de WhatsApp en este hilo.
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-border/70 bg-[#f6f2eb] px-5 py-4">
+                <div className="flex items-start gap-3 rounded-2xl border border-border/70 bg-white px-4 py-4 shadow-soft">
+                  <div className="mt-0.5 text-primary">
+                    <MessageSquare className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-foreground">Vista de conversación</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Este panel es de solo lectura. n8n debe ir enviando cada mensaje entrante y saliente al webhook para que el historial se vea aquí en tiempo real.
+                    </p>
                   </div>
                 </div>
-              </>
-            ) : (
-              <div className="rounded-2xl border border-dashed border-border bg-white/70 p-8 text-center text-sm text-muted-foreground">
-                Selecciona una conversación del panel izquierdo para ver la llamada inicial y los mensajes.
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex min-h-[76vh] items-center justify-center px-8 py-10">
+            <div className="max-w-md rounded-[24px] border border-dashed border-border/70 bg-white/85 p-8 text-center shadow-soft">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <ShieldAlert className="h-6 w-6" />
+              </div>
+              <h3 className="mt-4 text-lg font-semibold text-foreground">Selecciona una conversación</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                En cuanto el agente de n8n empiece a intercambiar mensajes con un lead, el hilo aparecerá en el panel izquierdo.
+              </p>
+            </div>
+          </div>
+        )}
+      </Card>
     </div>
   );
 }

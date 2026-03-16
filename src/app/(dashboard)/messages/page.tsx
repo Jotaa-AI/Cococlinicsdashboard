@@ -1,20 +1,15 @@
 import { MessagesInbox } from "@/components/messages/MessagesInbox";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function MessagesPage() {
   return (
-    <Card>
-      <CardHeader className="gap-3">
-        <div className="space-y-1">
-          <CardTitle>Mensajes</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Revisa la llamada inicial del agente y el hilo posterior de WhatsApp para cada lead.
-          </p>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <MessagesInbox />
-      </CardContent>
-    </Card>
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <h1 className="text-2xl font-semibold text-foreground">Mensajes</h1>
+        <p className="text-sm text-muted-foreground">
+          Aquí veremos todas las conversaciones del agente con cada lead, separando la llamada inicial y el hilo de WhatsApp.
+        </p>
+      </div>
+      <MessagesInbox />
+    </div>
   );
 }
