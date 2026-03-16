@@ -22,6 +22,20 @@ interface ThreadListItem extends WaThread {
   messagesCount: number;
 }
 
+interface ConversationListItem {
+  id: string;
+  threadIds: string[];
+  primaryThreadId: string;
+  lead: Pick<Lead, "id" | "full_name" | "phone" | "treatment"> | null;
+  phone_e164: string;
+  state: string;
+  hitl_active: boolean;
+  updated_at: string | null;
+  lastMessageAt: string | null;
+  lastMessageText: string | null;
+  messagesCount: number;
+}
+
 interface InitialCallContext {
   call: Call | null;
   lead: Pick<Lead, "full_name" | "phone" | "treatment"> | null;
@@ -107,12 +121,16 @@ function formatStateLabel(state?: string | null) {
   return state.replace(/_/g, " ");
 }
 
-function getThreadDisplayName(thread: ThreadListItem) {
-  return thread.lead?.full_name || thread.phone_e164 || "Lead sin identificar";
+function getConversationDisplayName(conversation: ConversationListItem) {
+  return conversation.lead?.full_name || conversation.phone_e164 || "Lead sin identificar";
 }
 
-function getThreadPreview(thread: ThreadListItem) {
-  return thread.lastMessageText || "Sin mensajes todavía";
+function getConversationPreview(conversation: ConversationListItem) {
+  return conversation.lastMessageText || "Sin mensajes todavía";
+}
+
+function getConversationKey(thread: ThreadListItem) {
+  return thread.lead?.id || normalizeEsPhone(thread.phone_e164) || thread.id;
 }
 
 function buildChatItems(messages: WaMessage[]) {
@@ -142,7 +160,7 @@ export function MessagesInbox() {
   const clinicId = profile?.clinic_id;
 
   const [threads, setThreads] = useState<ThreadListItem[]>([]);
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<WaMessage[]>([]);
   const [initialCall, setInitialCall] = useState<InitialCallContext>({ call: null, lead: null });
   const [loadingThreads, setLoadingThreads] = useState(false);
@@ -171,7 +189,7 @@ export function MessagesInbox() {
     const typedThreads = ((threadRows || []) as WaThread[]).filter(Boolean);
     if (!typedThreads.length) {
       setThreads([]);
-      setSelectedThreadId(null);
+      setSelectedConversationId(null);
       setLoadingThreads(false);
       return;
     }
@@ -237,50 +255,106 @@ export function MessagesInbox() {
     });
 
     setThreads(nextThreads);
-    setSelectedThreadId((current) => (current && nextThreads.some((thread) => thread.id === current) ? current : nextThreads[0]?.id || null));
     setLoadingThreads(false);
   }, [clinicId, supabase]);
 
-  const selectedThread = useMemo(
-    () => threads.find((thread) => thread.id === selectedThreadId) || null,
-    [selectedThreadId, threads]
+  const conversations = useMemo<ConversationListItem[]>(() => {
+    const grouped = new Map<string, ConversationListItem>();
+
+    for (const thread of threads) {
+      const key = getConversationKey(thread);
+      const existing = grouped.get(key);
+      const candidateTimestamp = new Date(thread.lastMessageAt || thread.updated_at || 0).getTime();
+      const existingTimestamp = existing ? new Date(existing.lastMessageAt || existing.updated_at || 0).getTime() : -1;
+
+      if (!existing) {
+        grouped.set(key, {
+          id: key,
+          threadIds: [thread.id],
+          primaryThreadId: thread.id,
+          lead: thread.lead,
+          phone_e164: thread.phone_e164,
+          state: thread.state,
+          hitl_active: thread.hitl_active,
+          updated_at: thread.updated_at || null,
+          lastMessageAt: thread.lastMessageAt,
+          lastMessageText: thread.lastMessageText,
+          messagesCount: thread.messagesCount,
+        });
+        continue;
+      }
+
+      existing.threadIds.push(thread.id);
+      existing.messagesCount += thread.messagesCount;
+      existing.hitl_active = existing.hitl_active || thread.hitl_active;
+
+      if (!existing.lead && thread.lead) existing.lead = thread.lead;
+
+      if (candidateTimestamp >= existingTimestamp) {
+        existing.primaryThreadId = thread.id;
+        existing.phone_e164 = thread.phone_e164;
+        existing.state = thread.state;
+        existing.updated_at = thread.updated_at || null;
+        existing.lastMessageAt = thread.lastMessageAt;
+        existing.lastMessageText = thread.lastMessageText;
+      }
+    }
+
+    return [...grouped.values()].sort((a, b) => {
+      const aTs = new Date(a.lastMessageAt || a.updated_at || 0).getTime();
+      const bTs = new Date(b.lastMessageAt || b.updated_at || 0).getTime();
+      return bTs - aTs;
+    });
+  }, [threads]);
+
+  useEffect(() => {
+    setSelectedConversationId((current) =>
+      current && conversations.some((conversation) => conversation.id === current)
+        ? current
+        : conversations[0]?.id || null
+    );
+  }, [conversations]);
+
+  const selectedConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === selectedConversationId) || null,
+    [selectedConversationId, conversations]
   );
 
   const filteredThreads = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return threads;
-    return threads.filter((thread) => {
+    if (!term) return conversations;
+    return conversations.filter((conversation) => {
       const haystack = [
-        getThreadDisplayName(thread),
-        thread.lead?.phone,
-        thread.phone_e164,
-        thread.lead?.treatment,
-        thread.lastMessageText,
+        getConversationDisplayName(conversation),
+        conversation.lead?.phone,
+        conversation.phone_e164,
+        conversation.lead?.treatment,
+        conversation.lastMessageText,
       ]
         .filter(Boolean)
         .join(" ")
         .toLowerCase();
       return haystack.includes(term);
     });
-  }, [search, threads]);
+  }, [search, conversations]);
 
   const chatItems = useMemo(() => buildChatItems(messages), [messages]);
 
   const toggleHitl = useCallback(async () => {
-    if (!selectedThread) return;
+    if (!selectedConversation) return;
     setTogglingHitl(true);
 
-    const nextValue = !selectedThread.hitl_active;
+    const nextValue = !selectedConversation.hitl_active;
     const updatedAt = new Date().toISOString();
     const { error } = await supabase
       .from("wa_threads")
       .update({ hitl_active: nextValue, updated_at: updatedAt })
-      .eq("id", selectedThread.id);
+      .in("id", selectedConversation.threadIds);
 
     if (!error) {
       setThreads((current) =>
         current.map((thread) =>
-          thread.id === selectedThread.id
+          selectedConversation.threadIds.includes(thread.id)
             ? {
                 ...thread,
                 hitl_active: nextValue,
@@ -292,10 +366,10 @@ export function MessagesInbox() {
     }
 
     setTogglingHitl(false);
-  }, [selectedThread, supabase]);
+  }, [selectedConversation, supabase]);
 
   const loadThreadDetail = useCallback(async () => {
-    if (!clinicId || !selectedThread) {
+    if (!clinicId || !selectedConversation) {
       setMessages([]);
       setInitialCall({ call: null, lead: null });
       return;
@@ -308,24 +382,24 @@ export function MessagesInbox() {
         .from("wa_messages")
         .select("*")
         .eq("clinic_id", clinicId)
-        .eq("thread_id", selectedThread.id)
+        .in("thread_id", selectedConversation.threadIds)
         .order("created_at", { ascending: true }),
-      (selectedThread.lead_id || selectedThread.lead?.id)
+      selectedConversation.lead?.id
         ? supabase
             .from("calls")
             .select("*")
             .eq("clinic_id", clinicId)
-            .eq("lead_id", selectedThread.lead_id || selectedThread.lead?.id)
+            .eq("lead_id", selectedConversation.lead.id)
             .order("started_at", { ascending: true })
             .limit(1)
             .maybeSingle()
         : Promise.resolve({ data: null as Call | null }),
-      selectedThread.phone_e164
+      selectedConversation.phone_e164
         ? supabase
             .from("calls")
             .select("*")
             .eq("clinic_id", clinicId)
-            .eq("phone", selectedThread.phone_e164)
+            .eq("phone", selectedConversation.phone_e164)
             .order("started_at", { ascending: true })
             .limit(1)
             .maybeSingle()
@@ -334,9 +408,9 @@ export function MessagesInbox() {
 
     const firstCall = (callByLeadResult.data as Call | null) || (callByPhoneResult.data as Call | null) || null;
     setMessages(((messagesResult.data || []) as WaMessage[]).filter(Boolean));
-    setInitialCall({ call: firstCall, lead: selectedThread.lead || null });
+    setInitialCall({ call: firstCall, lead: selectedConversation.lead || null });
     setLoadingMessages(false);
-  }, [clinicId, selectedThread, supabase]);
+  }, [clinicId, selectedConversation, supabase]);
 
   useEffect(() => {
     loadThreads();
@@ -402,13 +476,13 @@ export function MessagesInbox() {
             <div className="p-5 text-sm text-muted-foreground">Cargando conversaciones...</div>
           ) : filteredThreads.length ? (
             <div className="divide-y divide-border/70">
-              {filteredThreads.map((thread) => {
-                const active = thread.id === selectedThreadId;
+              {filteredThreads.map((conversation) => {
+                const active = conversation.id === selectedConversationId;
                 return (
                   <button
-                    key={thread.id}
+                    key={conversation.id}
                     type="button"
-                    onClick={() => setSelectedThreadId(thread.id)}
+                    onClick={() => setSelectedConversationId(conversation.id)}
                     className={cn(
                       "flex w-full items-start gap-3 px-4 py-4 text-left transition",
                       active ? "bg-[#efeae2]" : "hover:bg-muted/40"
@@ -420,16 +494,17 @@ export function MessagesInbox() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-foreground">{getThreadDisplayName(thread)}</p>
-                          <p className="truncate text-xs text-muted-foreground">{thread.lead?.phone || thread.phone_e164}</p>
+                          <p className="truncate text-sm font-semibold text-foreground">{getConversationDisplayName(conversation)}</p>
+                          <p className="truncate text-xs text-muted-foreground">{conversation.lead?.phone || conversation.phone_e164}</p>
                         </div>
-                        <div className="shrink-0 text-[11px] text-muted-foreground">{formatSidebarTime(thread.lastMessageAt || thread.updated_at)}</div>
+                        <div className="shrink-0 text-[11px] text-muted-foreground">
+                          {formatSidebarTime(conversation.lastMessageAt || conversation.updated_at)}
+                        </div>
                       </div>
-                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{getThreadPreview(thread)}</p>
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{getConversationPreview(conversation)}</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {thread.lead?.treatment ? <Badge variant="soft">{thread.lead.treatment}</Badge> : null}
-                        {thread.hitl_active ? <Badge variant="warning">HITL</Badge> : <Badge variant="success">IA activa</Badge>}
-                        <Badge variant="soft">{thread.messagesCount} mensajes</Badge>
+                        {conversation.hitl_active ? <Badge variant="warning">HITL</Badge> : <Badge variant="success">IA activa</Badge>}
+                        <Badge variant="soft">{conversation.messagesCount} mensajes</Badge>
                       </div>
                     </div>
                   </button>
@@ -443,7 +518,7 @@ export function MessagesInbox() {
       </Card>
 
       <Card className="overflow-hidden rounded-[28px] border-border/70 bg-[#efeae2]">
-        {selectedThread ? (
+        {selectedConversation ? (
           <>
             <div className="border-b border-border/70 bg-[#f6f2eb] px-5 py-4">
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -452,25 +527,25 @@ export function MessagesInbox() {
                     <UserRound className="h-5 w-5" />
                   </div>
                   <div className="min-w-0">
-                    <p className="truncate text-base font-semibold text-foreground">{getThreadDisplayName(selectedThread)}</p>
+                    <p className="truncate text-base font-semibold text-foreground">{getConversationDisplayName(selectedConversation)}</p>
                     <p className="truncate text-sm text-muted-foreground">
-                      {selectedThread.lead?.phone || selectedThread.phone_e164}
-                      {selectedThread.lead?.treatment ? ` · ${selectedThread.lead.treatment}` : ""}
+                      {selectedConversation.lead?.phone || selectedConversation.phone_e164}
+                      {selectedConversation.lead?.treatment ? ` · ${selectedConversation.lead.treatment}` : ""}
                     </p>
                   </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <Badge variant="soft">{formatStateLabel(selectedThread.state)}</Badge>
-                  {selectedThread.hitl_active ? <Badge variant="warning">HITL activo</Badge> : <Badge variant="success">IA activa</Badge>}
+                  <Badge variant="soft">{formatStateLabel(selectedConversation.state)}</Badge>
+                  {selectedConversation.hitl_active ? <Badge variant="warning">HITL activo</Badge> : <Badge variant="success">IA activa</Badge>}
                   <Button
                     type="button"
-                    variant={selectedThread.hitl_active ? "default" : "outline"}
+                    variant={selectedConversation.hitl_active ? "default" : "outline"}
                     size="sm"
                     onClick={toggleHitl}
                     disabled={togglingHitl}
                   >
                     <Bot className="h-4 w-4" />
-                    {selectedThread.hitl_active ? "Conectar IA" : "Detener IA"}
+                    {selectedConversation.hitl_active ? "Conectar IA" : "Detener IA"}
                   </Button>
                 </div>
               </div>
