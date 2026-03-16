@@ -67,6 +67,8 @@ export function PostVisitLeadsCard() {
   const [reasonByLeadId, setReasonByLeadId] = useState<Record<string, string>>({});
   const [savingLeadId, setSavingLeadId] = useState<string | null>(null);
   const [errorByLeadId, setErrorByLeadId] = useState<Record<string, string>>({});
+  const [noticeByLeadId, setNoticeByLeadId] = useState<Record<string, string>>({});
+  const [noShowAppointmentId, setNoShowAppointmentId] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
 
   const loadRows = useCallback(async () => {
@@ -323,6 +325,53 @@ export function PostVisitLeadsCard() {
     [clinicId, profile?.role, profile?.user_id, reasonByLeadId, serviceByLeadId, supabase, valueByLeadId, loadRows]
   );
 
+  const markNoShow = useCallback(
+    async (row: PostVisitLeadRow) => {
+      if (!row.lead) return;
+
+      const lead = row.lead;
+      const defaultReason = "No asistió a la cita";
+      const reason = (reasonByLeadId[lead.id] || "").trim() || defaultReason;
+
+      setNoShowAppointmentId(row.appointment.id);
+      setErrorByLeadId((prev) => ({ ...prev, [lead.id]: "" }));
+      setNoticeByLeadId((prev) => ({ ...prev, [lead.id]: "" }));
+
+      const response = await fetch("/api/appointments/no-show", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          appointment_id: row.appointment.id,
+          reason,
+        }),
+      }).catch(() => null);
+
+      const payload = await response?.json().catch(() => null);
+
+      if (!response?.ok) {
+        setErrorByLeadId((prev) => ({
+          ...prev,
+          [lead.id]: payload?.error || "No se pudo activar el flujo de no-show.",
+        }));
+        setNoShowAppointmentId(null);
+        return;
+      }
+
+      setReasonByLeadId((prev) => ({ ...prev, [lead.id]: reason }));
+      setNoticeByLeadId((prev) => ({
+        ...prev,
+        [lead.id]: payload?.warning
+          ? `Webhook enviado. ${payload.warning}`
+          : "Webhook enviado. Lead pasado a seguimiento por no asistencia.",
+      }));
+      setNoShowAppointmentId(null);
+      await loadRows();
+    },
+    [loadRows, reasonByLeadId]
+  );
+
   return (
     <>
       <CelebrationOverlay open={showCelebration} />
@@ -387,6 +436,7 @@ export function PostVisitLeadsCard() {
                 const lead = row.lead;
                 const leadId = lead?.id || row.appointment.id;
                 const saving = savingLeadId === lead?.id;
+                const reportingNoShow = noShowAppointmentId === row.appointment.id;
 
                 return (
                   <div key={leadId} className="rounded-2xl border border-rose-200 bg-rose-50/70 p-4">
@@ -425,6 +475,15 @@ export function PostVisitLeadsCard() {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                            disabled={saving || reportingNoShow}
+                            onClick={() => markNoShow(row)}
+                          >
+                            {reportingNoShow ? "Enviando..." : "No asistió a la cita"}
+                          </Button>
                           <Button type="button" variant="outline" disabled={saving} onClick={() => setOutcome(row, "post_visit_pending_decision")}>
                             Pendiente decisión
                           </Button>
@@ -486,6 +545,9 @@ export function PostVisitLeadsCard() {
 
                         {errorByLeadId[lead.id] ? (
                           <p className="text-xs text-rose-600">{errorByLeadId[lead.id]}</p>
+                        ) : null}
+                        {noticeByLeadId[lead.id] ? (
+                          <p className="text-xs text-emerald-700">{noticeByLeadId[lead.id]}</p>
                         ) : null}
                       </div>
                     ) : (

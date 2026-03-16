@@ -1,0 +1,125 @@
+import { NextResponse } from "next/server";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/admin";
+import { updateLeadOutcome } from "@/lib/leads/update-lead-outcome";
+
+const NO_SHOW_WEBHOOK_URL =
+  process.env.N8N_NO_SHOW_WEBHOOK_URL ||
+  "https://personal-n8n.brtnrr.easypanel.host/webhook/no_asiste_cita";
+
+export async function POST(request: Request) {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("clinic_id, role")
+    .eq("user_id", user.id)
+    .single();
+
+  if (!profile?.clinic_id) {
+    return NextResponse.json({ error: "No clinic" }, { status: 400 });
+  }
+
+  const body = await request.json().catch(() => null);
+  if (!body?.appointment_id) {
+    return NextResponse.json({ error: "appointment_id es obligatorio" }, { status: 400 });
+  }
+
+  const admin = createSupabaseAdminClient();
+  const { data: appointment, error: appointmentError } = await admin
+    .from("appointments")
+    .select("id, clinic_id, entry_type, lead_id, lead_name, lead_phone, title, start_at, end_at, status, notes, source_channel")
+    .eq("clinic_id", profile.clinic_id)
+    .eq("id", body.appointment_id)
+    .single();
+
+  if (appointmentError || !appointment) {
+    return NextResponse.json({ error: "No se encontró la cita." }, { status: 404 });
+  }
+
+  if (appointment.entry_type === "internal_block") {
+    return NextResponse.json({ error: "Solo se puede marcar no-show en citas de lead." }, { status: 400 });
+  }
+
+  const reason =
+    typeof body.reason === "string" && body.reason.trim()
+      ? body.reason.trim()
+      : "No asistió a la cita";
+
+  const { data: lead } = appointment.lead_id
+    ? await admin
+        .from("leads")
+        .select("id, full_name, phone, treatment, stage_key")
+        .eq("clinic_id", profile.clinic_id)
+        .eq("id", appointment.lead_id)
+        .maybeSingle()
+    : { data: null as null };
+
+  const webhookResponse = await fetch(NO_SHOW_WEBHOOK_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      action: "appointment_no_show",
+      clinic_id: appointment.clinic_id,
+      appointment_id: appointment.id,
+      appointment_title: appointment.title,
+      appointment_start_at: appointment.start_at,
+      appointment_end_at: appointment.end_at,
+      appointment_status: appointment.status,
+      appointment_source_channel: appointment.source_channel || "staff",
+      lead_id: lead?.id || appointment.lead_id,
+      lead_name: lead?.full_name || appointment.lead_name,
+      lead_phone: lead?.phone || appointment.lead_phone,
+      lead_treatment: lead?.treatment || null,
+      lead_stage_key: lead?.stage_key || null,
+      reason,
+      reported_by_user_id: user.id,
+      reported_by_role: profile.role || "staff",
+      source_channel: "staff_app",
+    }),
+  }).catch(() => null);
+
+  if (!webhookResponse?.ok) {
+    return NextResponse.json({ error: "No se pudo notificar el no-show al webhook de n8n." }, { status: 502 });
+  }
+
+  let outcomeError: string | null = null;
+  if (appointment.lead_id) {
+    const result = await updateLeadOutcome({
+      supabase: admin,
+      clinicId: profile.clinic_id,
+      leadId: appointment.lead_id,
+      toStageKey: "post_visit_follow_up",
+      actorType: profile.role || "staff",
+      actorId: user.id,
+      source: "dashboard_no_show",
+      outcomeReason: reason,
+    });
+
+    if (!result.ok) {
+      outcomeError = result.error || "No se pudo actualizar el lead tras marcar el no-show.";
+    }
+  }
+
+  const mergedNotes = [appointment.notes, reason].filter(Boolean).join(" | ");
+  await admin
+    .from("appointments")
+    .update({ notes: mergedNotes || null })
+    .eq("clinic_id", profile.clinic_id)
+    .eq("id", appointment.id);
+
+  return NextResponse.json({
+    ok: true,
+    appointment_id: appointment.id,
+    warning: outcomeError,
+  });
+}
