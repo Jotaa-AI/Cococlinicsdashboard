@@ -22,6 +22,7 @@ export interface Lead {
   first_call_answered: boolean | null;
   second_call_answered: boolean | null;
   whatsapp_handoff_needed: boolean;
+  has_scheduled_appointment: boolean;
   stage_key: string | null;
   ab_variant: "A" | "B" | null;
   last_contact_at: string | null;
