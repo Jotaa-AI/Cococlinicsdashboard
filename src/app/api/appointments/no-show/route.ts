@@ -35,16 +35,24 @@ export async function POST(request: Request) {
   const admin = createSupabaseAdminClient();
   const { data: appointment, error: appointmentError } = await admin
     .from("appointments")
-    .select("id, clinic_id, entry_type, lead_id, lead_name, lead_phone, title, start_at, end_at, status, notes, source_channel")
+    .select("*")
     .eq("clinic_id", profile.clinic_id)
     .eq("id", body.appointment_id)
     .single();
 
-  if (appointmentError || !appointment) {
+  if (appointmentError) {
+    const notFound = appointmentError.code === "PGRST116";
+    return NextResponse.json(
+      { error: notFound ? "No se encontró la cita." : appointmentError.message || "No se pudo leer la cita." },
+      { status: notFound ? 404 : 400 }
+    );
+  }
+
+  if (!appointment) {
     return NextResponse.json({ error: "No se encontró la cita." }, { status: 404 });
   }
 
-  if (appointment.entry_type === "internal_block") {
+  if ("entry_type" in appointment && appointment.entry_type === "internal_block") {
     return NextResponse.json({ error: "Solo se puede marcar no-show en citas de lead." }, { status: 400 });
   }
 
@@ -75,7 +83,10 @@ export async function POST(request: Request) {
       appointment_start_at: appointment.start_at,
       appointment_end_at: appointment.end_at,
       appointment_status: appointment.status,
-      appointment_source_channel: appointment.source_channel || "staff",
+      appointment_source_channel:
+        "source_channel" in appointment && typeof appointment.source_channel === "string"
+          ? appointment.source_channel
+          : "staff",
       lead_id: lead?.id || appointment.lead_id,
       lead_name: lead?.full_name || appointment.lead_name,
       lead_phone: lead?.phone || appointment.lead_phone,
