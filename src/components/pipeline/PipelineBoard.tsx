@@ -180,6 +180,17 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
     is_active: true,
   },
   {
+    stage_key: "visit_no_show",
+    pipeline_key: "closed",
+    pipeline_label_es: "Cerrados",
+    label_es: "No asistió a cita",
+    description_es: "Lead con cita agendada que no acudió",
+    pipeline_order: 3,
+    order_index: 35,
+    is_terminal: false,
+    is_active: true,
+  },
+  {
     stage_key: "post_visit_not_closed",
     pipeline_key: "closed",
     pipeline_label_es: "Cerrados",

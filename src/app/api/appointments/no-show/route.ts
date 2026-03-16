@@ -109,7 +109,7 @@ export async function POST(request: Request) {
       supabase: admin,
       clinicId: profile.clinic_id,
       leadId: appointment.lead_id,
-      toStageKey: "post_visit_follow_up",
+      toStageKey: "visit_no_show",
       actorType: profile.role || "staff",
       actorId: user.id,
       source: "dashboard_no_show",

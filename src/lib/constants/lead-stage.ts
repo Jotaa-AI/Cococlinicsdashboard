@@ -90,6 +90,12 @@ export const STAGE_TONE_ES: Record<string, StageTone> = {
     badge: "warning",
     hint: "Hace falta seguimiento comercial tras la visita",
   },
+  visit_no_show: {
+    mood: "No show",
+    accent: "border-t-amber-500",
+    badge: "warning",
+    hint: "No asistió a la cita y requiere reactivación",
+  },
   post_visit_not_closed: {
     mood: "No cerró",
     accent: "border-t-rose-300",
@@ -130,6 +136,7 @@ export const LEGACY_STATUS_FROM_STAGE: Record<string, string> = {
   visit_scheduled: "visit_scheduled",
   post_visit_pending_decision: "contacted",
   post_visit_follow_up: "contacted",
+  visit_no_show: "contacted",
   post_visit_not_closed: "not_interested",
   client_closed: "visit_scheduled",
   not_interested: "not_interested",

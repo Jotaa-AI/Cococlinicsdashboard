@@ -1208,6 +1208,7 @@ values
   ('visit_scheduled', 'closed', 'Cerrados', 'Agendado', 'Cita confirmada en agenda', 3, 10, true, true),
   ('post_visit_pending_decision', 'closed', 'Cerrados', 'Pendiente decisión', 'Visitó la clínica y está valorando la propuesta', 3, 20, false, true),
   ('post_visit_follow_up', 'closed', 'Cerrados', 'Seguimiento post-visita', 'Requiere seguimiento comercial tras la visita', 3, 30, false, true),
+  ('visit_no_show', 'closed', 'Cerrados', 'No asistió a cita', 'Lead con cita agendada que no acudió', 3, 35, false, true),
   ('post_visit_not_closed', 'closed', 'Cerrados', 'No cerró tras visita', 'Hizo la visita pero no se cerró la venta', 3, 40, true, true),
   ('client_closed', 'closed', 'Cerrados', 'Cliente cerrado', 'Venta cerrada y cliente convertido', 3, 50, true, true),
   ('not_interested', 'closed', 'Cerrados', 'No interesado', 'Lead rechazó continuar', 3, 60, true, true),
@@ -1388,6 +1389,7 @@ as $$
     when 'visit_scheduled' then 'visit_scheduled'::lead_status
     when 'post_visit_pending_decision' then 'contacted'::lead_status
     when 'post_visit_follow_up' then 'contacted'::lead_status
+    when 'visit_no_show' then 'contacted'::lead_status
     when 'post_visit_not_closed' then 'not_interested'::lead_status
     when 'client_closed' then 'visit_scheduled'::lead_status
     when 'not_interested' then 'not_interested'::lead_status

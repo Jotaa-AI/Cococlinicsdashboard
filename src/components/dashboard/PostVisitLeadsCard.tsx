@@ -157,7 +157,13 @@ export function PostVisitLeadsCard() {
           lead,
         };
       })
-      .filter((row) => !row.lead || (row.lead.stage_key !== "client_closed" && !row.lead.converted_to_client)) as PostVisitLeadRow[];
+      .filter(
+        (row) =>
+          !row.lead ||
+          (row.lead.stage_key !== "client_closed" &&
+            row.lead.stage_key !== "visit_no_show" &&
+            !row.lead.converted_to_client)
+      ) as PostVisitLeadRow[];
 
     setRows(nextRows);
 
