@@ -2,21 +2,20 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Bot, MessageSquare, Phone, RefreshCw, Search, ShieldAlert, UserRound } from "lucide-react";
+import { Bot, Phone, RefreshCw, Search, ShieldAlert, UserRound } from "lucide-react";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import { normalizeEsPhone } from "@/lib/leads/resolveLead";
 import type { Call, Lead, WaMessage, WaThread } from "@/lib/types";
+import { CLINIC_TIMEZONE, formatClinicDate, formatClinicDateTime, formatClinicTime } from "@/lib/datetime/clinicTime";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils/cn";
 
-const CLINIC_TZ = "Europe/Madrid";
-
 interface ThreadListItem extends WaThread {
-  lead: Pick<Lead, "id" | "full_name" | "phone" | "treatment"> | null;
+  lead: Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked"> | null;
   lastMessageAt: string | null;
   lastMessageText: string | null;
   messagesCount: number;
@@ -26,7 +25,7 @@ interface ConversationListItem {
   id: string;
   threadIds: string[];
   primaryThreadId: string;
-  lead: Pick<Lead, "id" | "full_name" | "phone" | "treatment"> | null;
+  lead: Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked"> | null;
   phone_e164: string;
   state: string;
   hitl_active: boolean;
@@ -56,47 +55,39 @@ type ChatItem = DaySeparatorItem | MessageItem;
 
 function formatDateTime(value?: string | null) {
   if (!value) return "—";
-  return new Date(value).toLocaleString("es-ES", {
+  return formatClinicDateTime(value, {
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: CLINIC_TZ,
   });
 }
 
 function formatSidebarTime(value?: string | null) {
   if (!value) return "—";
-  return new Date(value).toLocaleString("es-ES", {
+  return formatClinicDateTime(value, {
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-    timeZone: CLINIC_TZ,
   });
 }
 
 function formatMessageTime(value?: string | null) {
   if (!value) return "—";
-  return new Date(value).toLocaleTimeString("es-ES", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: CLINIC_TZ,
-  });
+  return formatClinicTime(value);
 }
 
 function formatDayLabel(value?: string | null) {
   if (!value) return "Sin fecha";
-  return new Date(value).toLocaleDateString("es-ES", {
+  return formatClinicDate(value, {
     weekday: "long",
     day: "2-digit",
     month: "long",
     year: "numeric",
-    timeZone: CLINIC_TZ,
   });
 }
 
@@ -106,7 +97,7 @@ function getDayKey(value?: string | null) {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-    timeZone: CLINIC_TZ,
+    timeZone: CLINIC_TIMEZONE,
   }).format(new Date(value));
 }
 
@@ -129,8 +120,43 @@ function getConversationPreview(conversation: ConversationListItem) {
   return conversation.lastMessageText || "Sin mensajes todavía";
 }
 
+function isHumanModeActive(conversation: ConversationListItem | null) {
+  if (!conversation) return false;
+  return Boolean(conversation.lead?.whatsapp_blocked || conversation.hitl_active);
+}
+
 function getConversationKey(thread: ThreadListItem) {
   return thread.lead?.id || normalizeEsPhone(thread.phone_e164) || thread.id;
+}
+
+function normalizeMessageText(text?: string | null) {
+  return text?.replace(/\s+/g, " ").trim().toLowerCase() || "";
+}
+
+function sanitizeConversationMessages(messages: WaMessage[]) {
+  const kept: WaMessage[] = [];
+
+  for (const message of messages) {
+    const messageTs = new Date(message.created_at).getTime();
+    const normalizedText = normalizeMessageText(message.text);
+
+    const isEchoOfInbound =
+      message.direction === "outbound" &&
+      message.role === "assistant" &&
+      normalizedText &&
+      messages.some((previous) => {
+        if (previous.id === message.id) return false;
+        if (previous.direction !== "inbound" || previous.role !== "human") return false;
+        if (normalizeMessageText(previous.text) !== normalizedText) return false;
+        const previousTs = new Date(previous.created_at).getTime();
+        return Math.abs(messageTs - previousTs) <= 2000;
+      });
+
+    if (isEchoOfInbound) continue;
+    kept.push(message);
+  }
+
+  return kept;
 }
 
 function buildChatItems(messages: WaMessage[]) {
@@ -202,38 +228,69 @@ export function MessagesInbox() {
 
     const [leadsByIdResult, leadsByPhoneResult, recentMessagesResult] = await Promise.all([
       leadIds.length
-        ? supabase.from("leads").select("id, full_name, phone, treatment").eq("clinic_id", clinicId).in("id", leadIds)
-        : Promise.resolve({ data: [] as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment">> }),
+        ? supabase
+            .from("leads")
+            .select("id, full_name, phone, treatment, whatsapp_blocked")
+            .eq("clinic_id", clinicId)
+            .in("id", leadIds)
+        : Promise.resolve({ data: [] as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked">> }),
       phones.length
-        ? supabase.from("leads").select("id, full_name, phone, treatment").eq("clinic_id", clinicId).in("phone", phones)
-        : Promise.resolve({ data: [] as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment">> }),
+        ? supabase
+            .from("leads")
+            .select("id, full_name, phone, treatment, whatsapp_blocked")
+            .eq("clinic_id", clinicId)
+            .in("phone", phones)
+        : Promise.resolve({ data: [] as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked">> }),
       supabase
         .from("wa_messages")
-        .select("id, thread_id, text, created_at")
+        .select("id, thread_id, direction, role, text, created_at")
         .eq("clinic_id", clinicId)
         .in("thread_id", threadIds)
         .order("created_at", { ascending: false }),
     ]);
 
-    const leadById = new Map<string, Pick<Lead, "id" | "full_name" | "phone" | "treatment">>();
-    const leadByPhone = new Map<string, Pick<Lead, "id" | "full_name" | "phone" | "treatment">>();
+    const leadById = new Map<string, Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked">>();
+    const leadByPhone = new Map<string, Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked">>();
 
-    for (const lead of ((leadsByIdResult.data || []) as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment">>)) {
+    for (const lead of ((leadsByIdResult.data || []) as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked">>)) {
       leadById.set(lead.id, lead);
     }
-    for (const lead of ((leadsByPhoneResult.data || []) as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment">>)) {
+    for (const lead of ((leadsByPhoneResult.data || []) as Array<Pick<Lead, "id" | "full_name" | "phone" | "treatment" | "whatsapp_blocked">>)) {
       const normalized = normalizeEsPhone(lead.phone);
       if (normalized) leadByPhone.set(normalized, lead);
     }
 
+    const threadMessagesMap = new Map<string, WaMessage[]>();
+    for (const message of (recentMessagesResult.data || []) as Array<Pick<WaMessage, "id" | "thread_id" | "direction" | "role" | "created_at" | "text">>) {
+      const current = threadMessagesMap.get(message.thread_id) || [];
+      current.push({
+        id: message.id,
+        thread_id: message.thread_id,
+        clinic_id: clinicId,
+        lead_id: null,
+        provider_message_id: null,
+        direction: message.direction,
+        role: message.role,
+        text: message.text,
+        intent: null,
+        ab_variant: null,
+        delivery_status: null,
+        metadata: {},
+        created_at: message.created_at,
+      });
+      threadMessagesMap.set(message.thread_id, current);
+    }
+
     const lastMessageByThread = new Map<string, { created_at: string; text: string }>();
     const countByThread = new Map<string, number>();
-    for (const message of (recentMessagesResult.data || []) as Array<Pick<WaMessage, "thread_id" | "created_at" | "text">>) {
-      countByThread.set(message.thread_id, (countByThread.get(message.thread_id) || 0) + 1);
-      if (!lastMessageByThread.has(message.thread_id)) {
-        lastMessageByThread.set(message.thread_id, {
-          created_at: message.created_at,
-          text: message.text,
+    for (const [threadId, threadMessages] of threadMessagesMap.entries()) {
+      const sanitized = sanitizeConversationMessages(threadMessages);
+      countByThread.set(threadId, sanitized.length);
+      const lastMessage = sanitized[0];
+      if (lastMessage) {
+        lastMessageByThread.set(threadId, {
+          created_at: lastMessage.created_at,
+          text: lastMessage.text,
         });
       }
     }
@@ -340,34 +397,6 @@ export function MessagesInbox() {
 
   const chatItems = useMemo(() => buildChatItems(messages), [messages]);
 
-  const toggleHitl = useCallback(async () => {
-    if (!selectedConversation) return;
-    setTogglingHitl(true);
-
-    const nextValue = !selectedConversation.hitl_active;
-    const updatedAt = new Date().toISOString();
-    const { error } = await supabase
-      .from("wa_threads")
-      .update({ hitl_active: nextValue, updated_at: updatedAt })
-      .in("id", selectedConversation.threadIds);
-
-    if (!error) {
-      setThreads((current) =>
-        current.map((thread) =>
-          selectedConversation.threadIds.includes(thread.id)
-            ? {
-                ...thread,
-                hitl_active: nextValue,
-                updated_at: updatedAt,
-              }
-            : thread
-        )
-      );
-    }
-
-    setTogglingHitl(false);
-  }, [selectedConversation, supabase]);
-
   const loadThreadDetail = useCallback(async () => {
     if (!clinicId || !selectedConversation) {
       setMessages([]);
@@ -407,10 +436,130 @@ export function MessagesInbox() {
     ]);
 
     const firstCall = (callByLeadResult.data as Call | null) || (callByPhoneResult.data as Call | null) || null;
-    setMessages(((messagesResult.data || []) as WaMessage[]).filter(Boolean));
+    setMessages(sanitizeConversationMessages(((messagesResult.data || []) as WaMessage[]).filter(Boolean)));
     setInitialCall({ call: firstCall, lead: selectedConversation.lead || null });
     setLoadingMessages(false);
   }, [clinicId, selectedConversation, supabase]);
+
+  const toggleHitl = useCallback(async () => {
+    if (!selectedConversation || !clinicId) return;
+    setTogglingHitl(true);
+
+    const nextValue = !isHumanModeActive(selectedConversation);
+    const updatedAt = new Date().toISOString();
+    const relatedThreads = threads.filter((thread) => selectedConversation.threadIds.includes(thread.id));
+    const candidateLeadIds = Array.from(
+      new Set(
+        [
+          selectedConversation.lead?.id,
+          ...relatedThreads.map((thread) => thread.lead_id),
+          ...relatedThreads.map((thread) => thread.lead?.id),
+        ].filter(Boolean)
+      )
+    ) as string[];
+    const candidatePhones = Array.from(
+      new Set(
+        [
+          selectedConversation.phone_e164,
+          selectedConversation.lead?.phone,
+          ...relatedThreads.map((thread) => thread.phone_e164),
+          ...relatedThreads.map((thread) => thread.lead?.phone),
+        ]
+          .map((phone) => normalizeEsPhone(phone) || phone || null)
+          .filter(Boolean)
+      )
+    ) as string[];
+
+    let targetLeadIds = candidateLeadIds;
+    if (!targetLeadIds.length && candidatePhones.length) {
+      const { data: matchedLeads } = await supabase
+        .from("leads")
+        .select("id")
+        .eq("clinic_id", clinicId)
+        .in("phone", candidatePhones);
+
+      targetLeadIds = Array.from(new Set(((matchedLeads || []) as Array<{ id: string }>).map((lead) => lead.id).filter(Boolean)));
+    }
+
+    const systemMessageText = nextValue
+      ? "Conversación entre humano - humano activada"
+      : "IA reactivada para esta conversación";
+
+    const threadUpdatePromise = supabase
+      .from("wa_threads")
+      .update({ hitl_active: nextValue, updated_at: updatedAt })
+      .in("id", selectedConversation.threadIds);
+
+    const leadUpdatePromise = targetLeadIds.length
+      ? supabase
+          .from("leads")
+          .update({
+            whatsapp_blocked: nextValue,
+            whatsapp_blocked_reason: nextValue ? "Conversación gestionada manualmente desde mensajes" : null,
+            whatsapp_blocked_at: nextValue ? updatedAt : null,
+            whatsapp_blocked_by_user_id: nextValue ? profile?.user_id || null : null,
+            updated_at: updatedAt,
+          })
+          .eq("clinic_id", clinicId)
+          .in("id", targetLeadIds)
+          .select("id")
+      : Promise.resolve({ data: [], error: null });
+
+    const systemMessagePromise = supabase
+      .from("wa_messages")
+      .insert({
+        thread_id: selectedConversation.primaryThreadId,
+        clinic_id: clinicId,
+        lead_id: targetLeadIds[0] || null,
+        direction: "outbound",
+        role: "system",
+        text: systemMessageText,
+        metadata: {
+          source: "staff_app",
+          event: nextValue ? "human_mode_enabled" : "ai_mode_enabled",
+        },
+        created_at: updatedAt,
+      })
+      .select("*")
+      .single();
+
+    const [{ error: threadError }, { data: updatedLeads, error: leadError }, { data: systemMessage, error: messageError }] = await Promise.all([
+      threadUpdatePromise,
+      leadUpdatePromise,
+      systemMessagePromise,
+    ]);
+
+    if (!threadError && !leadError && !messageError) {
+      const updatedLeadIds = new Set(((updatedLeads || []) as Array<{ id: string }>).map((lead) => lead.id));
+      setThreads((current) =>
+        current.map((thread) =>
+          selectedConversation.threadIds.includes(thread.id)
+            ? {
+                ...thread,
+                hitl_active: nextValue,
+                updated_at: updatedAt,
+                lastMessageAt: thread.id === selectedConversation.primaryThreadId ? updatedAt : thread.lastMessageAt,
+                lastMessageText: thread.id === selectedConversation.primaryThreadId ? systemMessageText : thread.lastMessageText,
+                messagesCount: thread.id === selectedConversation.primaryThreadId ? thread.messagesCount + 1 : thread.messagesCount,
+                lead: thread.lead
+                  ? {
+                      ...thread.lead,
+                      whatsapp_blocked: updatedLeadIds.has(thread.lead.id) ? nextValue : thread.lead.whatsapp_blocked,
+                    }
+                  : thread.lead,
+              }
+            : thread
+        )
+      );
+      if (systemMessage) {
+        setMessages((current) => [...current, systemMessage as WaMessage].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()));
+      }
+      await loadThreads();
+      await loadThreadDetail();
+    }
+
+    setTogglingHitl(false);
+  }, [clinicId, loadThreadDetail, loadThreads, profile?.user_id, selectedConversation, supabase, threads]);
 
   useEffect(() => {
     loadThreads();
@@ -503,7 +652,7 @@ export function MessagesInbox() {
                       </div>
                       <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{getConversationPreview(conversation)}</p>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
-                        {conversation.hitl_active ? <Badge variant="warning">HITL</Badge> : <Badge variant="success">IA activa</Badge>}
+                        {isHumanModeActive(conversation) ? <Badge variant="warning">Humano activo</Badge> : <Badge variant="success">IA activa</Badge>}
                         <Badge variant="soft">{conversation.messagesCount} mensajes</Badge>
                       </div>
                     </div>
@@ -536,22 +685,22 @@ export function MessagesInbox() {
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="soft">{formatStateLabel(selectedConversation.state)}</Badge>
-                  {selectedConversation.hitl_active ? <Badge variant="warning">HITL activo</Badge> : <Badge variant="success">IA activa</Badge>}
+                  {isHumanModeActive(selectedConversation) ? <Badge variant="warning">Humano activo</Badge> : <Badge variant="success">IA activa</Badge>}
                   <Button
                     type="button"
-                    variant={selectedConversation.hitl_active ? "default" : "outline"}
+                    variant={isHumanModeActive(selectedConversation) ? "default" : "outline"}
                     size="sm"
                     onClick={toggleHitl}
                     disabled={togglingHitl}
                   >
                     <Bot className="h-4 w-4" />
-                    {selectedConversation.hitl_active ? "Conectar IA" : "Detener IA"}
+                    {isHumanModeActive(selectedConversation) ? "Conectar IA" : "Detener IA"}
                   </Button>
                 </div>
               </div>
             </div>
 
-            <div className="grid min-h-[76vh] grid-rows-[auto_1fr_auto]">
+            <div className="grid min-h-[76vh] grid-rows-[auto_1fr]">
               <div className="border-b border-border/70 bg-white/80 px-5 py-4">
                 <div className="flex items-start gap-3 rounded-2xl border border-border/70 bg-white px-4 py-4 shadow-soft">
                   <div className="mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
@@ -652,20 +801,6 @@ export function MessagesInbox() {
                     </div>
                   </div>
                 )}
-              </div>
-
-              <div className="border-t border-border/70 bg-[#f6f2eb] px-5 py-4">
-                <div className="flex items-start gap-3 rounded-2xl border border-border/70 bg-white px-4 py-4 shadow-soft">
-                  <div className="mt-0.5 text-primary">
-                    <MessageSquare className="h-5 w-5" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-foreground">Vista de conversación</p>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Este panel es de solo lectura. n8n debe ir enviando cada mensaje entrante y saliente al webhook para que el historial se vea aquí en tiempo real.
-                    </p>
-                  </div>
-                </div>
               </div>
             </div>
           </>

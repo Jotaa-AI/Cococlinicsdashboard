@@ -9,6 +9,7 @@ import type { Call } from "@/lib/types";
 import { formatDistanceStrict } from "date-fns";
 import { es } from "date-fns/locale";
 import { PhoneCall } from "lucide-react";
+import { formatClinicTime } from "@/lib/datetime/clinicTime";
 
 interface ActiveCallRow extends Pick<Call, "id" | "status" | "started_at" | "phone" | "lead_id"> {
   leadName?: string | null;
@@ -154,13 +155,7 @@ export function CurrentCallCard() {
                   <div>
                     <p className="text-muted-foreground">Inicio</p>
                     <p className="font-medium">
-                      {call.started_at
-                        ? new Date(call.started_at).toLocaleTimeString("es-ES", {
-                            hour: "2-digit",
-                            minute: "2-digit",
-                            hour12: false,
-                          })
-                        : "—"}
+                      {call.started_at ? formatClinicTime(call.started_at) : "—"}
                     </p>
                   </div>
                   <div>

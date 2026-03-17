@@ -46,6 +46,36 @@ export function formatClinicDateTime(
   });
 }
 
+export function formatClinicDate(
+  value: string | Date,
+  options: Intl.DateTimeFormatOptions = {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }
+) {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toLocaleDateString("es-ES", {
+    ...options,
+    timeZone: CLINIC_TIMEZONE,
+  });
+}
+
+export function formatClinicTime(
+  value: string | Date,
+  options: Intl.DateTimeFormatOptions = {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }
+) {
+  const date = value instanceof Date ? value : new Date(value);
+  return date.toLocaleTimeString("es-ES", {
+    ...options,
+    timeZone: CLINIC_TIMEZONE,
+  });
+}
+
 export function toClinicDateInputValue(value: string | Date) {
   const date = value instanceof Date ? value : new Date(value);
   const parts = getParts(date);

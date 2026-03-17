@@ -5,6 +5,7 @@ import FullCalendar from "@fullcalendar/react";
 import timeGridPlugin from "@fullcalendar/timegrid";
 import dayGridPlugin from "@fullcalendar/daygrid";
 import interactionPlugin from "@fullcalendar/interaction";
+import luxonPlugin from "@fullcalendar/luxon3";
 import esLocale from "@fullcalendar/core/locales/es";
 import type { EventClickArg, EventInput, DateSelectArg } from "@fullcalendar/core";
 import type { DateClickArg } from "@fullcalendar/interaction";
@@ -238,7 +239,10 @@ export function CalendarView() {
     };
   }, [clinicId, loadEvents, loadUpcomingAppointments, supabase]);
 
-  const calendarPlugins = useMemo(() => [timeGridPlugin, dayGridPlugin, interactionPlugin], []);
+  const calendarPlugins = useMemo(
+    () => [luxonPlugin, timeGridPlugin, dayGridPlugin, interactionPlugin],
+    []
+  );
 
   const openCreateDialog = useCallback((start: Date, end?: Date) => {
     setDialogMode("create");

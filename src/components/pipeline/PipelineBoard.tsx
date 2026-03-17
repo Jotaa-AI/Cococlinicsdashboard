@@ -15,6 +15,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { CelebrationOverlay } from "@/components/ui/celebration-overlay";
+import { formatClinicDateTime } from "@/lib/datetime/clinicTime";
 
 const LEGACY_STAGE_FROM_STATUS: Record<string, string> = {
   new: "new_lead",
@@ -237,9 +238,13 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
 ];
 
 function toLocalDate(value: string) {
-  return new Date(value).toLocaleString("es-ES", {
-    dateStyle: "short",
-    timeStyle: "short",
+  return formatClinicDateTime(value, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
   });
 }
 
