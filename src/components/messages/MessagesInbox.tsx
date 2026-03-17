@@ -133,10 +133,37 @@ function normalizeMessageText(text?: string | null) {
   return text?.replace(/\s+/g, " ").trim().toLowerCase() || "";
 }
 
+function getMessageChronologyRank(message: WaMessage) {
+  if (message.direction === "inbound" && message.role === "human") return 0;
+  if (message.direction === "outbound" && message.role === "human") return 1;
+  if (message.direction === "outbound" && message.role === "assistant") return 2;
+  if (message.role === "system") return 3;
+  return 4;
+}
+
+function sortConversationMessages(messages: WaMessage[]) {
+  return messages
+    .map((message, index) => ({ message, index }))
+    .sort((a, b) => {
+      const aTs = new Date(a.message.created_at).getTime();
+      const bTs = new Date(b.message.created_at).getTime();
+
+      if (aTs !== bTs) return aTs - bTs;
+
+      const aRank = getMessageChronologyRank(a.message);
+      const bRank = getMessageChronologyRank(b.message);
+      if (aRank !== bRank) return aRank - bRank;
+
+      return a.index - b.index;
+    })
+    .map(({ message }) => message);
+}
+
 function sanitizeConversationMessages(messages: WaMessage[]) {
+  const ordered = sortConversationMessages(messages);
   const kept: WaMessage[] = [];
 
-  for (const message of messages) {
+  for (const message of ordered) {
     const messageTs = new Date(message.created_at).getTime();
     const normalizedText = normalizeMessageText(message.text);
 
@@ -144,8 +171,7 @@ function sanitizeConversationMessages(messages: WaMessage[]) {
       message.direction === "outbound" &&
       message.role === "assistant" &&
       normalizedText &&
-      messages.some((previous) => {
-        if (previous.id === message.id) return false;
+      kept.some((previous) => {
         if (previous.direction !== "inbound" || previous.role !== "human") return false;
         if (normalizeMessageText(previous.text) !== normalizedText) return false;
         const previousTs = new Date(previous.created_at).getTime();
@@ -286,7 +312,7 @@ export function MessagesInbox() {
     for (const [threadId, threadMessages] of threadMessagesMap.entries()) {
       const sanitized = sanitizeConversationMessages(threadMessages);
       countByThread.set(threadId, sanitized.length);
-      const lastMessage = sanitized[0];
+    const lastMessage = sanitized.at(-1);
       if (lastMessage) {
         lastMessageByThread.set(threadId, {
           created_at: lastMessage.created_at,
@@ -552,7 +578,7 @@ export function MessagesInbox() {
         )
       );
       if (systemMessage) {
-        setMessages((current) => [...current, systemMessage as WaMessage].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()));
+        setMessages((current) => sanitizeConversationMessages([...current, systemMessage as WaMessage]));
       }
       await loadThreads();
       await loadThreadDetail();
