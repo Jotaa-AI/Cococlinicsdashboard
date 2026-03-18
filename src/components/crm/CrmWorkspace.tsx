@@ -323,13 +323,39 @@ export function CrmWorkspace() {
     setLoadingLeads(true);
     setError(null);
 
+    const fetchAllLeads = async () => {
+      const pageSize = 1000;
+      let from = 0;
+      let hasMore = true;
+      const collected: Lead[] = [];
+
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from("leads")
+          .select(LEAD_SELECT_FIELDS)
+          .eq("clinic_id", clinicId)
+          .order("updated_at", { ascending: false })
+          .range(from, from + pageSize - 1);
+
+        if (error) {
+          return { data: null as Lead[] | null, error };
+        }
+
+        const chunk = (data || []) as Lead[];
+        collected.push(...chunk);
+
+        if (chunk.length < pageSize) {
+          hasMore = false;
+        } else {
+          from += pageSize;
+        }
+      }
+
+      return { data: collected, error: null };
+    };
+
     const [leadsResult, stagesResult, membersResult] = await Promise.all([
-      supabase
-        .from("leads")
-        .select(LEAD_SELECT_FIELDS)
-        .eq("clinic_id", clinicId)
-        .order("updated_at", { ascending: false })
-        .limit(500),
+      fetchAllLeads(),
       supabase
         .from("lead_stage_catalog")
         .select("stage_key, label_es, pipeline_label_es, pipeline_order, order_index, is_active")
@@ -785,8 +811,10 @@ export function CrmWorkspace() {
         <CardHeader className="border-b border-border bg-[linear-gradient(180deg,rgba(244,240,230,0.95),rgba(255,255,255,0.95))]">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <CardTitle>Leads</CardTitle>
-              <p className="text-sm text-muted-foreground">Tu bandeja de Clientes para seguir el estado comercial real.</p>
+              <CardTitle>Todos los leads</CardTitle>
+              <p className="text-sm text-muted-foreground">
+                Tu bandeja de Clientes para seguir el estado comercial real.
+              </p>
             </div>
             <Button type="button" variant="outline" size="sm" className="h-10 w-10 px-0" onClick={loadLeads} disabled={loadingLeads}>
               <RefreshCw className={cn("h-4 w-4", loadingLeads && "animate-spin")} />
@@ -819,6 +847,9 @@ export function CrmWorkspace() {
               </Button>
             ))}
           </div>
+          <p className="text-xs text-muted-foreground">
+            {filteredLeads.length} visibles · {leads.length} totales en base de datos
+          </p>
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-14rem)] overflow-y-auto p-0">
           {filteredLeads.length ? (
