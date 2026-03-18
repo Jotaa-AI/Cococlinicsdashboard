@@ -92,6 +92,7 @@ create table if not exists leads (
   treatment text,
   source text default 'meta',
   managed_by lead_managed_by,
+  owner_user_id uuid references auth.users(id) on delete set null,
   status lead_status not null default 'new',
   intents lead_intent,
   converted_to_client boolean not null default false,
@@ -122,6 +123,7 @@ create index if not exists leads_converted_at_idx on leads (clinic_id, converted
 create index if not exists leads_contacto_futuro_idx on leads (clinic_id, contacto_futuro) where contacto_futuro is not null;
 create index if not exists leads_whatsapp_blocked_idx on leads (clinic_id, whatsapp_blocked);
 create index if not exists leads_managed_by_idx on leads (clinic_id, managed_by);
+create index if not exists leads_owner_user_idx on leads (clinic_id, owner_user_id);
 
 create table if not exists calls (
   id uuid primary key default gen_random_uuid(),
@@ -273,6 +275,7 @@ alter table if exists appointments
 
 alter table if exists leads
   add column if not exists managed_by lead_managed_by,
+  add column if not exists owner_user_id uuid references auth.users(id) on delete set null,
   add column if not exists converted_to_client boolean not null default false,
   add column if not exists converted_value_eur numeric(10,2),
   add column if not exists converted_service_name text,

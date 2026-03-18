@@ -8,6 +8,7 @@ export interface Lead {
   treatment: string | null;
   source: string | null;
   managed_by: "humano" | "IA" | null;
+  owner_user_id: string | null;
   status: string;
   intents: "1" | "2" | null;
   converted_to_client: boolean;
@@ -135,6 +136,19 @@ export interface LeadNote {
   created_by_name: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface LeadNextAction {
+  id: string;
+  clinic_id: string;
+  lead_id: string;
+  action_type: "retry_call" | "start_whatsapp_ai" | "notify_team";
+  due_at: string;
+  status: "pending" | "running" | "done" | "canceled" | "failed";
+  payload: Json;
+  idempotency_key: string | null;
+  processed_at: string | null;
+  created_at: string;
 }
 
 export interface SystemState {
