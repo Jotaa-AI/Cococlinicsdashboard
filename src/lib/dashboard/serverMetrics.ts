@@ -25,6 +25,10 @@ export interface DashboardSummary {
   callsMonth: number;
   callCostMonth: number;
   appointmentsMonth: number;
+  callAiAppointmentsMonth: number;
+  whatsappAiAppointmentsMonth: number;
+  callAiAppointmentsSharePct: number;
+  whatsappAiAppointmentsSharePct: number;
   wonAppointmentsMonth: number;
   wonRevenueMonth: number;
   estimatedAppointmentsMonth: number;
@@ -57,7 +61,7 @@ function getHourKey(date: Date) {
 }
 
 function isScheduledAppointment(appointment: Appointment) {
-  return appointment.status === "scheduled";
+  return appointment.status === "scheduled" && appointment.entry_type !== "internal_block";
 }
 
 function startForView(viewMode: DashboardChartView, referenceDate: Date) {
@@ -141,6 +145,20 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
     return inRange(getReferenceTimestamp(appointment.start_at, appointment.created_at), monthStartMs, monthEndMs);
   });
 
+  const callAiAppointmentsMonth = scheduledAppointmentsMonth.filter(
+    (appointment) => appointment.source_channel === "call_ai"
+  ).length;
+  const whatsappAiAppointmentsMonth = scheduledAppointmentsMonth.filter(
+    (appointment) => appointment.source_channel === "whatsapp_ai"
+  ).length;
+  const aiAppointmentsMonth = callAiAppointmentsMonth + whatsappAiAppointmentsMonth;
+  const callAiAppointmentsSharePct = aiAppointmentsMonth
+    ? Number(((callAiAppointmentsMonth / aiAppointmentsMonth) * 100).toFixed(1))
+    : 0;
+  const whatsappAiAppointmentsSharePct = aiAppointmentsMonth
+    ? Number(((whatsappAiAppointmentsMonth / aiAppointmentsMonth) * 100).toFixed(1))
+    : 0;
+
   const closedLeadKeys = new Set(
     leads
       .filter((lead) => {
@@ -182,6 +200,10 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
     callsMonth: callsMonth.length,
     callCostMonth: Number(callCostMonth.toFixed(2)),
     appointmentsMonth: scheduledAppointmentsMonth.length,
+    callAiAppointmentsMonth,
+    whatsappAiAppointmentsMonth,
+    callAiAppointmentsSharePct,
+    whatsappAiAppointmentsSharePct,
     wonAppointmentsMonth,
     wonRevenueMonth: Number(wonRevenueMonth.toFixed(2)),
     estimatedAppointmentsMonth,

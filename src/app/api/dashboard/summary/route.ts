@@ -56,7 +56,7 @@ export async function GET(request: Request) {
       .eq("status", "ended"),
     admin
       .from("appointments")
-      .select("id, lead_id, lead_phone, status, start_at, created_at")
+      .select("*")
       .eq("clinic_id", profile.clinic_id),
   ]);
 

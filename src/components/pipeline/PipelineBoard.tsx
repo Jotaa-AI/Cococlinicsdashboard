@@ -7,7 +7,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
 import type { Lead, LeadStageCatalog, LeadStageHistory } from "@/lib/types";
-import { LEGACY_STATUS_FROM_STAGE, PIPELINE_LABELS_ES, STAGE_TONE_ES } from "@/lib/constants/lead-stage";
+import { LEGACY_STATUS_FROM_STAGE, STAGE_TONE_ES } from "@/lib/constants/lead-stage";
 import { updateLeadOutcome } from "@/lib/leads/update-lead-outcome";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,15 +25,6 @@ const LEGACY_STAGE_FROM_STATUS: Record<string, string> = {
   visit_scheduled: "visit_scheduled",
   no_response: "no_answer_first_call",
   not_interested: "not_interested",
-};
-
-const HIDDEN_PIPELINES = new Set(["whatsapp_ai"]);
-
-const STAGE_REDIRECT_WHEN_HIDDEN: Record<string, string> = {
-  contacting_whatsapp: "no_answer_second_call",
-  whatsapp_conversation_active: "no_answer_second_call",
-  whatsapp_followup_pending: "no_answer_second_call",
-  whatsapp_failed_team_review: "no_answer_second_call",
 };
 
 const FALLBACK_STAGES: LeadStageCatalog[] = [
@@ -237,6 +228,100 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
   },
 ];
 
+interface PipelineColumn {
+  id:
+    | "new_lead"
+    | "recontact"
+    | "active_conversation"
+    | "visit_scheduled"
+    | "visit_no_show"
+    | "post_visit_pending_decision"
+    | "post_visit_follow_up"
+    | "client_closed"
+    | "lost";
+  label: string;
+  description: string;
+  representativeStageKey: string;
+}
+
+const SIMPLIFIED_PIPELINE_COLUMNS: PipelineColumn[] = [
+  {
+    id: "new_lead",
+    label: "Nuevo lead",
+    description: "Entradas nuevas pendientes de primer contacto.",
+    representativeStageKey: "new_lead",
+  },
+  {
+    id: "recontact",
+    label: "Recontactar",
+    description: "No se ha logrado conversación útil o toca reintento.",
+    representativeStageKey: "second_call_scheduled",
+  },
+  {
+    id: "active_conversation",
+    label: "Conversación activa",
+    description: "Llamada o WhatsApp en curso con oportunidad real de agendar.",
+    representativeStageKey: "whatsapp_conversation_active",
+  },
+  {
+    id: "visit_scheduled",
+    label: "Cita agendada",
+    description: "Visitas futuras confirmadas en agenda.",
+    representativeStageKey: "visit_scheduled",
+  },
+  {
+    id: "visit_no_show",
+    label: "No asistió",
+    description: "Leads que faltaron a su visita y requieren recuperación.",
+    representativeStageKey: "visit_no_show",
+  },
+  {
+    id: "post_visit_pending_decision",
+    label: "Pendiente cierre",
+    description: "Ya visitaron la clínica y están valorando la propuesta.",
+    representativeStageKey: "post_visit_pending_decision",
+  },
+  {
+    id: "post_visit_follow_up",
+    label: "Seguimiento",
+    description: "Necesitan seguimiento comercial tras la visita.",
+    representativeStageKey: "post_visit_follow_up",
+  },
+  {
+    id: "client_closed",
+    label: "Cliente cerrado",
+    description: "Ventas cerradas con valor confirmado.",
+    representativeStageKey: "client_closed",
+  },
+  {
+    id: "lost",
+    label: "Perdido",
+    description: "Oportunidades descartadas o no cerradas.",
+    representativeStageKey: "not_interested",
+  },
+];
+
+const PIPELINE_COLUMN_FROM_STAGE: Record<string, PipelineColumn["id"]> = {
+  new_lead: "new_lead",
+  first_call_in_progress: "recontact",
+  no_answer_first_call: "recontact",
+  second_call_scheduled: "recontact",
+  second_call_in_progress: "recontact",
+  no_answer_second_call: "recontact",
+  contacting_whatsapp: "active_conversation",
+  whatsapp_conversation_active: "active_conversation",
+  whatsapp_followup_pending: "active_conversation",
+  whatsapp_failed_team_review: "active_conversation",
+  visit_scheduled: "visit_scheduled",
+  visit_no_show: "visit_no_show",
+  post_visit_pending_decision: "post_visit_pending_decision",
+  post_visit_follow_up: "post_visit_follow_up",
+  client_closed: "client_closed",
+  post_visit_not_closed: "lost",
+  not_interested: "lost",
+  discarded: "lost",
+};
+
 function toLocalDate(value: string) {
   return formatClinicDateTime(value, {
     day: "2-digit",
@@ -298,20 +383,20 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
 }
 
 function StageColumn({
-  stage,
+  column,
   leads,
   onOpen,
 }: {
-  stage: LeadStageCatalog;
+  column: PipelineColumn;
   leads: Lead[];
   onOpen: (lead: Lead) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: stage.stage_key });
-  const tone = STAGE_TONE_ES[stage.stage_key] || {
+  const { setNodeRef, isOver } = useDroppable({ id: column.id });
+  const tone = STAGE_TONE_ES[column.representativeStageKey] || {
     mood: "En curso",
     accent: "border-t-slate-300",
     badge: "default" as const,
-    hint: stage.description_es || "",
+    hint: column.description,
   };
 
   return (
@@ -320,11 +405,11 @@ function StageColumn({
       className={`h-[68vh] min-h-[500px] w-[84vw] max-w-[320px] shrink-0 overflow-hidden border bg-card/80 sm:h-[620px] sm:w-[290px] sm:max-w-none ${tone.accent} border-t-2 ${isOver ? "ring-2 ring-primary/30" : ""}`}
     >
       <div className="border-b border-border bg-white px-3 py-3">
-        <p className="truncate text-sm font-semibold">{stage.label_es}</p>
+        <p className="truncate text-sm font-semibold">{column.label}</p>
         <p className="text-[11px] text-muted-foreground">{leads.length} oportunidades</p>
         <div className="mt-2 flex items-center gap-2">
           <Badge variant={tone.badge}>{tone.mood}</Badge>
-          <p className="truncate text-[11px] text-muted-foreground">{tone.hint}</p>
+          <p className="truncate text-[11px] text-muted-foreground">{column.description}</p>
         </div>
       </div>
 
@@ -367,17 +452,19 @@ export function PipelineBoard() {
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
-  const visibleStages = useMemo(() => {
-    return stages.filter((stage) => !HIDDEN_PIPELINES.has(stage.pipeline_key));
-  }, [stages]);
-
   const stageMap = useMemo(() => {
     const map = new Map<string, LeadStageCatalog>();
-    for (const stage of visibleStages) {
+    for (const stage of stages) {
       map.set(stage.stage_key, stage);
     }
     return map;
-  }, [visibleStages]);
+  }, [stages]);
+
+  const pipelineColumns = useMemo(() => SIMPLIFIED_PIPELINE_COLUMNS, []);
+  const columnMap = useMemo(
+    () => new Map(pipelineColumns.map((column) => [column.id, column])),
+    [pipelineColumns]
+  );
 
   const resolveStageKey = useCallback(
     (lead: Pick<Lead, "stage_key" | "status" | "intents">) => {
@@ -389,45 +476,35 @@ export function PipelineBoard() {
       const current = lead.stage_key || "";
       if (current && stageMap.has(current)) return current;
 
-      const redirected = STAGE_REDIRECT_WHEN_HIDDEN[current];
-      if (redirected && stageMap.has(redirected)) return redirected;
-
       const legacy = LEGACY_STAGE_FROM_STATUS[lead.status] || "new_lead";
       if (stageMap.has(legacy)) return legacy;
 
-      return visibleStages[0]?.stage_key || "new_lead";
+      return "new_lead";
     },
-    [stageMap, visibleStages]
+    [stageMap]
+  );
+
+  const resolvePipelineColumnKey = useCallback(
+    (lead: Pick<Lead, "stage_key" | "status" | "intents">) => {
+      const stageKey = resolveStageKey(lead);
+      return PIPELINE_COLUMN_FROM_STAGE[stageKey] || "new_lead";
+    },
+    [resolveStageKey]
   );
 
   const grouped = useMemo(() => {
     const map: Record<string, Lead[]> = {};
-    for (const stage of visibleStages) {
-      map[stage.stage_key] = [];
+    for (const column of pipelineColumns) {
+      map[column.id] = [];
     }
 
     for (const lead of leads) {
-      const stageKey = resolveStageKey(lead);
-      if (map[stageKey]) map[stageKey].push({ ...lead, stage_key: stageKey });
+      const columnKey = resolvePipelineColumnKey(lead);
+      if (map[columnKey]) map[columnKey].push(lead);
     }
 
     return map;
-  }, [leads, visibleStages, resolveStageKey]);
-
-  const pipelines = useMemo(() => {
-    const map = new Map<string, LeadStageCatalog[]>();
-    for (const stage of visibleStages) {
-      const list = map.get(stage.pipeline_key) || [];
-      list.push(stage);
-      map.set(stage.pipeline_key, list);
-    }
-
-    return Array.from(map.entries()).sort((a, b) => {
-      const orderA = Math.min(...a[1].map((stage) => stage.pipeline_order));
-      const orderB = Math.min(...b[1].map((stage) => stage.pipeline_order));
-      return orderA - orderB;
-    });
-  }, [visibleStages]);
+  }, [leads, pipelineColumns, resolvePipelineColumnKey]);
 
   const loadStages = useCallback(async () => {
     const { data } = await supabase
@@ -545,17 +622,19 @@ export function PipelineBoard() {
 
     let newStage: string | null = null;
 
-    if (stageMap.has(overId)) {
-      newStage = overId;
+    if (columnMap.has(overId as PipelineColumn["id"])) {
+      newStage = columnMap.get(overId as PipelineColumn["id"])?.representativeStageKey || null;
     } else {
       const overLead = leads.find((lead) => lead.id === overId);
       if (overLead) {
-        newStage = resolveStageKey(overLead);
+        const targetColumn = columnMap.get(resolvePipelineColumnKey(overLead));
+        newStage = targetColumn?.representativeStageKey || resolveStageKey(overLead);
       }
     }
 
-    const currentStage = resolveStageKey(currentLead);
-    if (!newStage || newStage === currentStage) return;
+    const currentColumn = resolvePipelineColumnKey(currentLead);
+    const nextColumn = PIPELINE_COLUMN_FROM_STAGE[newStage || ""] || null;
+    if (!newStage || !nextColumn || nextColumn === currentColumn) return;
 
     const newStatus = LEGACY_STATUS_FROM_STAGE[newStage] || currentLead.status;
     setLeads((prev) =>
@@ -706,37 +785,29 @@ export function PipelineBoard() {
     <>
       <CelebrationOverlay open={showCelebration} />
       <div className="mb-4 rounded-xl border border-border bg-muted/20 p-3">
-        <p className="text-sm font-semibold">Pipeline por etapas dinámicas</p>
-        <p className="text-xs text-muted-foreground">Vista principal de llamadas y cierre.</p>
+        <p className="text-sm font-semibold">Pipeline comercial simplificado</p>
+        <p className="text-xs text-muted-foreground">Una vista clara para clínica: recontacto, conversación, cita y cierre.</p>
       </div>
 
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-        <div className="space-y-6">
-          {pipelines.map(([pipelineKey, stageList]) => (
-            <div key={pipelineKey} className="space-y-2">
-              <div className="flex items-center justify-between rounded-xl border border-border bg-white px-4 py-3">
-                <p className="text-sm font-semibold">
-                  {stageList[0]?.pipeline_label_es || PIPELINE_LABELS_ES[pipelineKey] || pipelineKey}
-                </p>
-                <Badge variant="soft">
-                  {stageList.reduce((acc, stage) => acc + (grouped[stage.stage_key]?.length || 0), 0)} leads
-                </Badge>
-              </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between rounded-xl border border-border bg-white px-4 py-3">
+            <p className="text-sm font-semibold">Estado actual de oportunidades</p>
+            <Badge variant="soft">{leads.length} leads</Badge>
+          </div>
 
-              <div className="overflow-x-auto pb-2">
-                <div className="flex min-w-max gap-3">
-                  {stageList.map((stage) => (
-                    <StageColumn
-                      key={stage.stage_key}
-                      stage={stage}
-                      leads={grouped[stage.stage_key] || []}
-                      onOpen={setActiveLead}
-                    />
-                  ))}
-                </div>
-              </div>
+          <div className="overflow-x-auto pb-2">
+            <div className="flex min-w-max gap-3">
+              {pipelineColumns.map((column) => (
+                <StageColumn
+                  key={column.id}
+                  column={column}
+                  leads={grouped[column.id] || []}
+                  onOpen={setActiveLead}
+                />
+              ))}
             </div>
-          ))}
+          </div>
         </div>
       </DndContext>
 
@@ -762,7 +833,7 @@ export function PipelineBoard() {
                 <Card className="p-4">
                   <p className="text-xs text-muted-foreground">Etapa actual</p>
                   <p className="text-sm font-medium">
-                    {stageMap.get(resolveStageKey(activeLead))?.label_es || resolveStageKey(activeLead) || "Sin etapa"}
+                    {columnMap.get(resolvePipelineColumnKey(activeLead))?.label || stageMap.get(resolveStageKey(activeLead))?.label_es || resolveStageKey(activeLead) || "Sin etapa"}
                   </p>
                 </Card>
                 <Card className="p-4">

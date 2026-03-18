@@ -80,7 +80,7 @@ export async function GET(request: Request) {
       .lt("created_at", range.end.toISOString()),
     admin
       .from("appointments")
-      .select("status, start_at, created_at")
+      .select("*")
       .eq("clinic_id", profile.clinic_id)
       .gte("start_at", range.start.toISOString())
       .lt("start_at", range.end.toISOString()),
