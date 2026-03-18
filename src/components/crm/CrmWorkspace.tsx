@@ -347,7 +347,7 @@ export function CrmWorkspace() {
         leadsResult.error?.message ||
           stagesResult.error?.message ||
           membersResult.error?.message ||
-          "No se pudieron cargar los datos del CRM."
+          "No se pudieron cargar los datos del apartado de Clientes."
       );
       setLoadingLeads(false);
       return;
@@ -776,7 +776,7 @@ export function CrmWorkspace() {
   }, [selectedLead?.stage_key, stageOptions]);
 
   if (profileLoading) {
-    return <div className="rounded-xl border border-border bg-white p-6 text-sm text-muted-foreground">Cargando CRM...</div>;
+    return <div className="rounded-xl border border-border bg-white p-6 text-sm text-muted-foreground">Cargando Clientes...</div>;
   }
 
   return (
@@ -786,7 +786,7 @@ export function CrmWorkspace() {
           <div className="flex items-center justify-between gap-3">
             <div>
               <CardTitle>Leads</CardTitle>
-              <p className="text-sm text-muted-foreground">Tu bandeja CRM para seguir el estado comercial real.</p>
+              <p className="text-sm text-muted-foreground">Tu bandeja de Clientes para seguir el estado comercial real.</p>
             </div>
             <Button type="button" variant="outline" size="sm" className="h-10 w-10 px-0" onClick={loadLeads} disabled={loadingLeads}>
               <RefreshCw className={cn("h-4 w-4", loadingLeads && "animate-spin")} />
@@ -1225,7 +1225,7 @@ export function CrmWorkspace() {
                 <h2 className="text-xl font-semibold text-foreground">Todavía no hay un lead seleccionado</h2>
                 <p className="text-sm text-muted-foreground">
                   En esta vista podremos revisar el estado actual del lead, asignar responsable, programar la próxima acción,
-                  tomar notas y ver la conversación completa de WhatsApp sin salir del CRM.
+                  tomar notas y ver la conversación completa de WhatsApp sin salir de Clientes.
                 </p>
               </div>
             </CardContent>

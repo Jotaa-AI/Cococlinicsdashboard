@@ -5,7 +5,7 @@ import { Calendar, KanbanSquare, LayoutDashboard, MessageSquare, Phone, UsersRou
 export const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/pipeline", label: "Pipeline", icon: KanbanSquare },
-  { href: "/crm", label: "CRM", icon: UsersRound },
+  { href: "/crm", label: "Clientes", icon: UsersRound },
   { href: "/calendar", label: "Agenda", icon: Calendar },
   { href: "/calls", label: "Llamadas", icon: Phone },
   { href: "/messages", label: "Mensajes", icon: MessageSquare },
