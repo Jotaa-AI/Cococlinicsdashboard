@@ -25,6 +25,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { CLINIC_TIMEZONE, formatClinicDateTime, toClinicDateInputValue, toClinicTimeInputValue, zonedDateTimeToUtcIso } from "@/lib/datetime/clinicTime";
+import { isNoShowAppointment } from "@/lib/appointments/no-show";
 
 type EntryType = "appointment" | "busy_block";
 
@@ -81,7 +82,8 @@ function buildAppointmentTitle(item: Appointment) {
   }
   const label = item.lead_name || item.title || "Cita";
   const treatment = item.title && item.lead_name ? item.title : null;
-  return treatment ? `${label} · ${treatment}` : label;
+  const baseTitle = treatment ? `${label} · ${treatment}` : label;
+  return isNoShowAppointment(item.notes) ? `No asistió · ${baseTitle}` : baseTitle;
 }
 
 function getDefaultSlotStart(date: Date) {
@@ -133,6 +135,30 @@ function getDraftFromDates(start: Date, end?: Date): DraftEntryState {
   };
 }
 
+function getAppointmentColors(item: Appointment) {
+  if (item.entry_type === "internal_block") {
+    return {
+      backgroundColor: "#d95f4f",
+      borderColor: "#d95f4f",
+      textColor: "#fff",
+    };
+  }
+
+  if (isNoShowAppointment(item.notes)) {
+    return {
+      backgroundColor: "#d1485f",
+      borderColor: "#d1485f",
+      textColor: "#fff",
+    };
+  }
+
+  return {
+    backgroundColor: "#233b57",
+    borderColor: "#233b57",
+    textColor: "#fff",
+  };
+}
+
 export function CalendarView() {
   const calendarRef = useRef<FullCalendar | null>(null);
   const supabase = createSupabaseBrowserClient();
@@ -156,9 +182,7 @@ export function CalendarView() {
       title: buildAppointmentTitle(item),
       start: item.start_at,
       end: item.end_at,
-      backgroundColor: item.entry_type === "internal_block" ? "#d95f4f" : "#233b57",
-      borderColor: item.entry_type === "internal_block" ? "#d95f4f" : "#233b57",
-      textColor: "#fff",
+      ...getAppointmentColors(item),
       extendedProps: {
         sourceId: item.id,
         entryType: item.entry_type === "internal_block" ? "busy_block" : "appointment",

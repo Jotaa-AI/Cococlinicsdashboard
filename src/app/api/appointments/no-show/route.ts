@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/admin";
 import { updateLeadOutcome } from "@/lib/leads/update-lead-outcome";
+import { buildNoShowNotes } from "@/lib/appointments/no-show";
 
 const NO_SHOW_WEBHOOK_URL =
   process.env.N8N_NO_SHOW_WEBHOOK_URL ||
@@ -61,14 +62,43 @@ export async function POST(request: Request) {
       ? body.reason.trim()
       : "No asistió a la cita";
 
-  const { data: lead } = appointment.lead_id
-    ? await admin
-        .from("leads")
-        .select("id, full_name, phone, treatment, stage_key")
-        .eq("clinic_id", profile.clinic_id)
-        .eq("id", appointment.lead_id)
-        .maybeSingle()
-    : { data: null as null };
+  const normalizedPhone =
+    typeof appointment.lead_phone === "string" && appointment.lead_phone.trim()
+      ? appointment.lead_phone.trim()
+      : null;
+  const normalizedName =
+    typeof appointment.lead_name === "string" && appointment.lead_name.trim()
+      ? appointment.lead_name.trim()
+      : null;
+
+  const [leadByIdResult, leadByPhoneResult, leadByNameResult] = await Promise.all([
+    appointment.lead_id
+      ? admin
+          .from("leads")
+          .select("id, full_name, phone, treatment, stage_key")
+          .eq("clinic_id", profile.clinic_id)
+          .eq("id", appointment.lead_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    normalizedPhone
+      ? admin
+          .from("leads")
+          .select("id, full_name, phone, treatment, stage_key")
+          .eq("clinic_id", profile.clinic_id)
+          .eq("phone", normalizedPhone)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+    normalizedName
+      ? admin
+          .from("leads")
+          .select("id, full_name, phone, treatment, stage_key")
+          .eq("clinic_id", profile.clinic_id)
+          .eq("full_name", normalizedName)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null }),
+  ]);
+
+  const lead = leadByIdResult.data || leadByPhoneResult.data || leadByNameResult.data || null;
 
   const webhookResponse = await fetch(NO_SHOW_WEBHOOK_URL, {
     method: "POST",
@@ -104,11 +134,11 @@ export async function POST(request: Request) {
   }
 
   let outcomeError: string | null = null;
-  if (appointment.lead_id) {
+  if (lead?.id) {
     const result = await updateLeadOutcome({
       supabase: admin,
       clinicId: profile.clinic_id,
-      leadId: appointment.lead_id,
+      leadId: lead.id,
       toStageKey: "visit_no_show",
       actorType: profile.role || "staff",
       actorId: user.id,
@@ -119,9 +149,11 @@ export async function POST(request: Request) {
     if (!result.ok) {
       outcomeError = result.error || "No se pudo actualizar el lead tras marcar el no-show.";
     }
+  } else {
+    outcomeError = "No se pudo vincular la cita con un lead para moverlo a 'No asistió a cita'.";
   }
 
-  const mergedNotes = [appointment.notes, reason].filter(Boolean).join(" | ");
+  const mergedNotes = buildNoShowNotes(appointment.notes, reason);
   await admin
     .from("appointments")
     .update({ notes: mergedNotes || null })

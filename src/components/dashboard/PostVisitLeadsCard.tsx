@@ -370,7 +370,7 @@ export function PostVisitLeadsCard() {
         ...prev,
         [lead.id]: payload?.warning
           ? `Webhook enviado. ${payload.warning}`
-          : "Webhook enviado. Lead pasado a seguimiento por no asistencia.",
+          : "Webhook enviado. Lead movido a 'No asistió a cita'.",
       }));
       setNoShowAppointmentId(null);
       await loadRows();
