@@ -47,7 +47,7 @@ export async function GET(request: Request) {
   const [leadsResult, callsResult, appointmentsResult] = await Promise.all([
     admin
       .from("leads")
-      .select("id, phone, created_at, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at")
+      .select("id, phone, created_at, converted_to_client, converted_at, converted_value_eur, stage_key, updated_at, managed_by")
       .eq("clinic_id", profile.clinic_id),
     admin
       .from("calls")

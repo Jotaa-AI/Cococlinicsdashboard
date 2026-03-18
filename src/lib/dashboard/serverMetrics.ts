@@ -22,6 +22,9 @@ export interface DashboardSummary {
   leadsDay: number;
   leadsWeek: number;
   leadsMonth: number;
+  managedByHumanMonth: number;
+  managedByAiMonth: number;
+  managedByUnknownMonth: number;
   callsMonth: number;
   callCostMonth: number;
   appointmentsMonth: number;
@@ -132,7 +135,11 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
 
   const leadsDay = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), todayStart, tomorrowStart)).length;
   const leadsWeek = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), weekStart, nextWeekStart)).length;
-  const leadsMonth = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), monthStartMs, monthEndMs)).length;
+  const leadsMonthRows = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), monthStartMs, monthEndMs));
+  const leadsMonth = leadsMonthRows.length;
+  const managedByHumanMonth = leadsMonthRows.filter((lead) => lead.managed_by === "humano").length;
+  const managedByAiMonth = leadsMonthRows.filter((lead) => lead.managed_by === "IA").length;
+  const managedByUnknownMonth = Math.max(0, leadsMonth - managedByHumanMonth - managedByAiMonth);
 
   const callsMonth = calls.filter((call) =>
     inRange(getReferenceTimestamp(call.ended_at, call.started_at, call.created_at), monthStartMs, monthEndMs)
@@ -197,6 +204,9 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
     leadsDay,
     leadsWeek,
     leadsMonth,
+    managedByHumanMonth,
+    managedByAiMonth,
+    managedByUnknownMonth,
     callsMonth: callsMonth.length,
     callCostMonth: Number(callCostMonth.toFixed(2)),
     appointmentsMonth: scheduledAppointmentsMonth.length,

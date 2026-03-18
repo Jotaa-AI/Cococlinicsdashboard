@@ -7,6 +7,7 @@ export interface Lead {
   phone: string | null;
   treatment: string | null;
   source: string | null;
+  managed_by: "humano" | "IA" | null;
   status: string;
   intents: "1" | "2" | null;
   converted_to_client: boolean;

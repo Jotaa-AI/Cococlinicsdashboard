@@ -23,6 +23,11 @@ function upperFirst(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function leadsMonthShare(value: number, total: number) {
+  if (!total) return 0;
+  return Number(((value / total) * 100).toFixed(1));
+}
+
 export function KpiGrid() {
   const supabase = createSupabaseBrowserClient();
   const { profile } = useProfile();
@@ -33,6 +38,9 @@ export function KpiGrid() {
     leadsDay: 0,
     leadsWeek: 0,
     leadsMonth: 0,
+    managedByHumanMonth: 0,
+    managedByAiMonth: 0,
+    managedByUnknownMonth: 0,
     callsMonth: 0,
     callCostMonth: 0,
     appointmentsMonth: 0,
@@ -105,6 +113,9 @@ export function KpiGrid() {
         ? "Captados esta semana"
         : `Captados en ${monthLabel}`;
 
+  const humanManagedShare = leadsMonthShare(kpis.managedByHumanMonth, kpis.leadsMonth);
+  const aiManagedShare = leadsMonthShare(kpis.managedByAiMonth, kpis.leadsMonth);
+
   const cards = [
     {
       label: "Leads",
@@ -119,6 +130,26 @@ export function KpiGrid() {
       note: monthLabel,
       detail: "Llamadas finalizadas en el periodo",
       accent: null,
+    },
+    {
+      label: "Gestionados por clínica",
+      value: String(kpis.managedByHumanMonth),
+      note: monthLabel,
+      detail:
+        kpis.leadsMonth > 0
+          ? `${humanManagedShare}% de los leads del periodo${kpis.managedByUnknownMonth ? ` · ${kpis.managedByUnknownMonth} sin asignar` : ""}`
+          : "Sin leads creados en el periodo",
+      accent: "text-sky-700",
+    },
+    {
+      label: "Gestionados por IA",
+      value: String(kpis.managedByAiMonth),
+      note: monthLabel,
+      detail:
+        kpis.leadsMonth > 0
+          ? `${aiManagedShare}% de los leads del periodo${kpis.managedByUnknownMonth ? ` · ${kpis.managedByUnknownMonth} sin asignar` : ""}`
+          : "Sin leads creados en el periodo",
+      accent: "text-violet-700",
     },
     {
       label: "Coste total llamadas",
