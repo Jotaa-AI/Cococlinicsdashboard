@@ -1322,6 +1322,20 @@ create table if not exists lead_next_actions (
 create unique index if not exists lead_next_actions_idempotency_uidx on lead_next_actions (clinic_id, idempotency_key);
 create index if not exists lead_next_actions_due_idx on lead_next_actions (clinic_id, status, due_at);
 
+create table if not exists lead_notes (
+  id uuid primary key default gen_random_uuid(),
+  clinic_id uuid not null references clinics(id) on delete cascade,
+  lead_id uuid not null references leads(id) on delete cascade,
+  body text not null,
+  created_by_user_id uuid references auth.users(id) on delete set null,
+  created_by_name text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create index if not exists lead_notes_lead_idx on lead_notes (lead_id, created_at desc);
+create index if not exists lead_notes_clinic_idx on lead_notes (clinic_id, created_at desc);
+
 create table if not exists wa_threads (
   id uuid primary key default gen_random_uuid(),
   clinic_id uuid not null references clinics(id) on delete cascade,
@@ -1738,6 +1752,7 @@ alter table lead_stage_catalog enable row level security;
 alter table lead_stage_history enable row level security;
 alter table lead_contact_attempts enable row level security;
 alter table lead_next_actions enable row level security;
+alter table lead_notes enable row level security;
 alter table wa_threads enable row level security;
 alter table wa_messages enable row level security;
 alter table webhook_receipts enable row level security;
@@ -1770,6 +1785,15 @@ create policy "Next actions insert" on lead_next_actions
   for insert with check (clinic_id = current_clinic_id());
 
 create policy "Next actions update" on lead_next_actions
+  for update using (clinic_id = current_clinic_id());
+
+create policy "Lead notes select" on lead_notes
+  for select using (clinic_id = current_clinic_id());
+
+create policy "Lead notes insert" on lead_notes
+  for insert with check (clinic_id = current_clinic_id());
+
+create policy "Lead notes update" on lead_notes
   for update using (clinic_id = current_clinic_id());
 
 create policy "WA threads select" on wa_threads
@@ -1805,5 +1829,6 @@ grant execute on function public.rpc_transition_lead_stage(uuid, uuid, text, tex
 alter publication supabase_realtime add table lead_stage_history;
 alter publication supabase_realtime add table lead_contact_attempts;
 alter publication supabase_realtime add table lead_next_actions;
+alter publication supabase_realtime add table lead_notes;
 alter publication supabase_realtime add table wa_threads;
 alter publication supabase_realtime add table wa_messages;

@@ -126,6 +126,17 @@ export interface WaMessage {
   created_at: string;
 }
 
+export interface LeadNote {
+  id: string;
+  clinic_id: string;
+  lead_id: string;
+  body: string;
+  created_by_user_id: string | null;
+  created_by_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface SystemState {
   id: string;
   clinic_id: string;

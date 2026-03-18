@@ -18,6 +18,7 @@ export async function POST(request: Request) {
     phone: payload.phone || null,
     treatment: payload.treatment || null,
     source: payload.source || "meta",
+    managed_by: payload.managed_by || null,
     status: payload.status || "new",
     stage_key: payload.stage_key || "new_lead",
     ab_variant: payload.ab_variant || null,
