@@ -107,7 +107,6 @@ export async function POST(request: Request) {
       title: body.title || "Cita Coco Clinics",
       start_at: slot.startAt,
       end_at: slot.endAt,
-      status: "scheduled",
       notes: body.notes || null,
       source_channel: body.source_channel || "staff",
       created_by: body.created_by || "staff",

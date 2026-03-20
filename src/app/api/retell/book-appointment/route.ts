@@ -115,7 +115,6 @@ export async function POST(request: Request) {
         title,
         start_at: slot.startAt,
         end_at: slot.endAt,
-        status: "scheduled",
         notes,
         source_channel: sourceChannel,
         created_by: "agent",

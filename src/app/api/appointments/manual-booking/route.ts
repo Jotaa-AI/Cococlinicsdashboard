@@ -136,7 +136,6 @@ export async function POST(request: Request) {
       title: safeTitle,
       start_at: slot.startAt,
       end_at: slot.endAt,
-      status: "scheduled",
       notes: notes || safeTitle,
       source_channel: "staff",
       created_by: "staff",

@@ -91,7 +91,6 @@ export async function POST(request: Request) {
     title: payload.title || "Cita Coco Clinics",
     start_at: slot.startAt,
     end_at: slot.endAt,
-    status: appointmentStatus,
     notes: payload.notes || null,
     source_channel: sourceChannel,
     created_by: payload.created_by || "agent",
