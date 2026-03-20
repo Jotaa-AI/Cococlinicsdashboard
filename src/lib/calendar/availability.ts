@@ -18,6 +18,19 @@ export interface OccupiedRange {
   id: string;
 }
 
+function extractMissingColumn(message?: string | null) {
+  if (!message) return null;
+  const quotedMatch = message.match(/'([^']+)' column/);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+  const relationMatch = message.match(/column \"([^\"]+)\" of relation/);
+  if (relationMatch?.[1]) return relationMatch[1];
+  const schemaMatch = message.match(/column ([a-zA-Z0-9_]+)\.[a-zA-Z0-9_]+ does not exist/);
+  if (schemaMatch?.[1]) return schemaMatch[1];
+  const simpleMatch = message.match(/column \"?([a-zA-Z0-9_]+)\"? does not exist/);
+  if (simpleMatch?.[1]) return simpleMatch[1];
+  return null;
+}
+
 export async function getOccupiedRanges(input: {
   supabase: any;
   clinicId: string;
@@ -39,7 +52,26 @@ export async function getOccupiedRanges(input: {
     appointmentQuery = appointmentQuery.neq("id", excludeAppointmentId);
   }
 
-  const { data: conflictingAppointments, error: appointmentError } = await appointmentQuery;
+  let { data: conflictingAppointments, error: appointmentError } = await appointmentQuery;
+
+  if (appointmentError && extractMissingColumn(appointmentError.message) === "entry_type") {
+    let fallbackQuery = supabase
+      .from("appointments")
+      .select("id, start_at, end_at")
+      .eq("clinic_id", clinicId)
+      .eq("status", "scheduled")
+      .lt("start_at", endAt)
+      .gt("end_at", startAt);
+
+    if (excludeAppointmentId) {
+      fallbackQuery = fallbackQuery.neq("id", excludeAppointmentId);
+    }
+
+    const fallbackResult = await fallbackQuery;
+    conflictingAppointments = fallbackResult.data;
+    appointmentError = fallbackResult.error;
+  }
+
   if (appointmentError) {
     return { ok: false, error: appointmentError.message };
   }
