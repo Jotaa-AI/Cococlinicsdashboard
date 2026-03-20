@@ -11,6 +11,17 @@ function pickFirstString(...values: Array<unknown>) {
   return null;
 }
 
+function getNestedValue(source: unknown, path: string[]) {
+  let current: unknown = source;
+  for (const segment of path) {
+    if (!current || typeof current !== "object" || !(segment in current)) {
+      return null;
+    }
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return current;
+}
+
 export async function POST(request: Request) {
   if (!assertWebhookSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -27,18 +38,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "clinic_id is required" }, { status: 400 });
   }
 
-  const rawPhone = pickFirstString(payloadRecord.phone_e164, payloadRecord.phone, payloadRecord.lead_phone);
-  const phoneE164 = normalizeEsPhone(rawPhone);
-  if (!phoneE164) {
-    return NextResponse.json({ error: "phone_e164 is required in +34 format" }, { status: 400 });
-  }
-
-  const text = pickFirstString(payloadRecord.text, payloadRecord.message);
-  if (!text) {
-    return NextResponse.json({ error: "text is required" }, { status: 400 });
-  }
-
-  const directionRaw = pickFirstString(payloadRecord.direction) || "outbound";
+  const directionRaw =
+    pickFirstString(payloadRecord.direction, getNestedValue(payloadRecord, ["body", "direction"])) || "outbound";
   const direction = directionRaw === "inbound" ? "inbound" : "outbound";
   const roleRaw = pickFirstString(payloadRecord.role);
   const role = roleRaw === "assistant" || roleRaw === "system" || roleRaw === "human"
@@ -46,6 +47,37 @@ export async function POST(request: Request) {
     : direction === "inbound"
       ? "human"
       : "assistant";
+
+  const rawPhone = pickFirstString(
+    payloadRecord.phone_e164,
+    payloadRecord.phone,
+    payloadRecord.lead_phone,
+    direction === "inbound" ? payloadRecord.from : payloadRecord.to,
+    direction === "inbound" ? getNestedValue(payloadRecord, ["body", "from"]) : getNestedValue(payloadRecord, ["body", "to"]),
+    payloadRecord.from,
+    payloadRecord.to,
+    getNestedValue(payloadRecord, ["body", "from"]),
+    getNestedValue(payloadRecord, ["body", "to"])
+  );
+  const phoneE164 = normalizeEsPhone(rawPhone);
+  if (!phoneE164) {
+    return NextResponse.json({ error: "phone_e164 is required in +34 format" }, { status: 400 });
+  }
+
+  const text = pickFirstString(
+    payloadRecord.text,
+    payloadRecord.message,
+    getNestedValue(payloadRecord, ["text", "body"]),
+    getNestedValue(payloadRecord, ["message", "body"]),
+    getNestedValue(payloadRecord, ["message", "text"]),
+    getNestedValue(payloadRecord, ["body", "text", "body"]),
+    getNestedValue(payloadRecord, ["body", "message", "body"]),
+    getNestedValue(payloadRecord, ["body", "message", "text"]),
+    getNestedValue(payloadRecord, ["body", "text"])
+  );
+  if (!text) {
+    return NextResponse.json({ error: "text is required" }, { status: 400 });
+  }
 
   const supabase = createSupabaseAdminClient();
 
@@ -100,7 +132,14 @@ export async function POST(request: Request) {
   }
 
   const thread = threadResult.data;
-  const providerMessageId = pickFirstString(payloadRecord.provider_message_id);
+  const providerMessageId = pickFirstString(
+    payloadRecord.provider_message_id,
+    payloadRecord.wamid,
+    payloadRecord.id,
+    getNestedValue(payloadRecord, ["body", "provider_message_id"]),
+    getNestedValue(payloadRecord, ["body", "wamid"]),
+    getNestedValue(payloadRecord, ["body", "id"])
+  );
   const metadata = payloadRecord.metadata && typeof payloadRecord.metadata === "object" ? (payloadRecord.metadata as Json) : {};
 
   const messagePayload = {
@@ -115,7 +154,15 @@ export async function POST(request: Request) {
     ab_variant: pickFirstString(payloadRecord.ab_variant),
     delivery_status: pickFirstString(payloadRecord.delivery_status),
     metadata,
-    created_at: pickFirstString(payloadRecord.created_at) || new Date().toISOString(),
+    created_at:
+      pickFirstString(
+        payloadRecord.created_at,
+        payloadRecord.createTime,
+        payloadRecord.timestamp,
+        getNestedValue(payloadRecord, ["body", "created_at"]),
+        getNestedValue(payloadRecord, ["body", "createTime"]),
+        getNestedValue(payloadRecord, ["body", "timestamp"])
+      ) || new Date().toISOString(),
   };
 
   const messageResult = providerMessageId
