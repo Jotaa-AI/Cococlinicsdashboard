@@ -130,7 +130,6 @@ export async function POST(request: Request) {
     supabase: admin,
     payload: {
       clinic_id: profile.clinic_id,
-      entry_type: "lead_visit",
       lead_id: lead.leadId,
       lead_name: lead.leadName,
       lead_phone: lead.leadPhone,
