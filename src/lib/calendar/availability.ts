@@ -24,7 +24,7 @@ function extractMissingColumn(message?: string | null) {
   if (quotedMatch?.[1]) return quotedMatch[1];
   const relationMatch = message.match(/column \"([^\"]+)\" of relation/);
   if (relationMatch?.[1]) return relationMatch[1];
-  const schemaMatch = message.match(/column ([a-zA-Z0-9_]+)\.[a-zA-Z0-9_]+ does not exist/);
+  const schemaMatch = message.match(/column (?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+) does not exist/);
   if (schemaMatch?.[1]) return schemaMatch[1];
   const simpleMatch = message.match(/column \"?([a-zA-Z0-9_]+)\"? does not exist/);
   if (simpleMatch?.[1]) return simpleMatch[1];
