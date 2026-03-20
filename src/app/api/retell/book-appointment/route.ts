@@ -5,6 +5,7 @@ import { validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
 import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
+import { persistAppointmentWithCompat } from "@/lib/appointments/persist";
 
 interface RetellBookAppointmentBody {
   clinic_id?: string;
@@ -104,9 +105,9 @@ export async function POST(request: Request) {
       body?.title || (resolvedLead.leadName ? `Valoracion gratuita · ${resolvedLead.leadName}` : "Valoracion gratuita");
     const notes = body?.notes || (treatment ? `Interes: ${treatment}.` : "Cita creada desde Retell.");
 
-    const { data: appointment, error: appointmentError } = await admin
-      .from("appointments")
-      .insert({
+    const { data: appointment, error: appointmentError } = await persistAppointmentWithCompat({
+      supabase: admin,
+      payload: {
         clinic_id: clinicId,
         entry_type: "lead_visit",
         lead_id: resolvedLead.leadId,
@@ -120,9 +121,9 @@ export async function POST(request: Request) {
         source_channel: sourceChannel,
         created_by: "agent",
         created_at: new Date().toISOString(),
-      })
-      .select("*")
-      .single();
+      },
+      select: "*",
+    });
 
     if (appointmentError || !appointment) {
       return NextResponse.json({ error: appointmentError?.message || "No se pudo crear la cita." }, { status: 400 });

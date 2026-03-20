@@ -5,6 +5,7 @@ import { validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
 import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
+import { persistAppointmentWithCompat } from "@/lib/appointments/persist";
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -96,9 +97,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: availability.error }, { status: 409 });
   }
 
-  const { data: appointment, error } = await admin
-    .from("appointments")
-    .insert({
+  const { data: appointment, error } = await persistAppointmentWithCompat({
+    supabase: admin,
+    payload: {
       clinic_id: profile.clinic_id,
       entry_type: "lead_visit",
       lead_id: resolvedLead.leadId,
@@ -112,9 +113,9 @@ export async function POST(request: Request) {
       source_channel: body.source_channel || "staff",
       created_by: body.created_by || "staff",
       created_at: new Date().toISOString(),
-    })
-    .select("*")
-    .single();
+    },
+    select: "*",
+  });
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "Insert failed" }, { status: 400 });

@@ -5,6 +5,7 @@ import { SLOT_MINUTES, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
 import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
+import { persistAppointmentWithCompat } from "@/lib/appointments/persist";
 
 export async function POST(request: Request) {
   if (!assertWebhookSecret(request)) {
@@ -98,27 +99,12 @@ export async function POST(request: Request) {
     created_at: payload.created_at || new Date().toISOString(),
   };
 
-  let appointment: Record<string, any> | null = null;
-  let error: { message?: string } | null = null;
-
-  if (appointmentId) {
-    const result = await supabase
-      .from("appointments")
-      .update(appointmentPayload)
-      .eq("id", appointmentId)
-      .select("*")
-      .single();
-    appointment = result.data;
-    error = result.error;
-  } else {
-    const result = await supabase
-      .from("appointments")
-      .insert(appointmentPayload)
-      .select("*")
-      .single();
-    appointment = result.data;
-    error = result.error;
-  }
+  const { data: appointment, error } = await persistAppointmentWithCompat({
+    supabase,
+    appointmentId,
+    payload: appointmentPayload,
+    select: "*",
+  });
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "Insert failed" }, { status: 400 });

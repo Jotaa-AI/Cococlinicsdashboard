@@ -5,6 +5,7 @@ import { SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/c
 import { checkSlotAvailability } from "@/lib/calendar/availability";
 import { transitionLeadStage } from "@/lib/pipeline/transition";
 import { normalizeEsPhone, resolveLeadForAppointment } from "@/lib/leads/resolveLead";
+import { persistAppointmentWithCompat } from "@/lib/appointments/persist";
 
 export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
@@ -61,9 +62,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: availability.error }, { status: 409 });
     }
 
-    const { data, error } = await admin
-      .from("appointments")
-      .insert({
+    const { data, error } = await persistAppointmentWithCompat({
+      supabase: admin,
+      payload: {
         clinic_id: profile.clinic_id,
         entry_type: "internal_block",
         title: safeTitle,
@@ -74,9 +75,9 @@ export async function POST(request: Request) {
         source_channel: "staff",
         created_by: "staff",
         created_at: new Date().toISOString(),
-      })
-      .select("id")
-      .single();
+      },
+      select: "id",
+    });
 
     if (error || !data) {
       return NextResponse.json({ error: error?.message || "No se pudo crear el bloqueo." }, { status: 400 });
@@ -125,9 +126,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No se pudo crear el lead." }, { status: 400 });
   }
 
-  const { data: appointment, error } = await admin
-    .from("appointments")
-    .insert({
+  const { data: appointment, error } = await persistAppointmentWithCompat({
+    supabase: admin,
+    payload: {
       clinic_id: profile.clinic_id,
       entry_type: "lead_visit",
       lead_id: lead.leadId,
@@ -141,9 +142,9 @@ export async function POST(request: Request) {
       source_channel: "staff",
       created_by: "staff",
       created_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
+    },
+    select: "id",
+  });
 
   if (error || !appointment) {
     return NextResponse.json({ error: error?.message || "No se pudo crear la cita." }, { status: 400 });
