@@ -61,8 +61,43 @@ interface ChatMessageItem {
 
 type ChatItem = DaySeparatorItem | ChatMessageItem;
 
-const LEAD_SELECT_FIELDS =
-  "id, clinic_id, full_name, phone, treatment, source, managed_by, owner_user_id, status, intents, converted_to_client, converted_value_eur, converted_service_name, converted_at, post_visit_outcome_reason, contacto_futuro, whatsapp_blocked, whatsapp_blocked_reason, whatsapp_blocked_at, whatsapp_blocked_by_user_id, first_call_answered, second_call_answered, whatsapp_handoff_needed, has_scheduled_appointment, stage_key, ab_variant, last_contact_at, next_action_at, created_at, updated_at";
+const REQUIRED_LEAD_FIELDS = [
+  "id",
+  "clinic_id",
+  "full_name",
+  "phone",
+  "treatment",
+  "source",
+  "status",
+  "created_at",
+  "updated_at",
+] as const;
+
+const OPTIONAL_LEAD_FIELDS = [
+  "managed_by",
+  "owner_user_id",
+  "intents",
+  "converted_to_client",
+  "converted_value_eur",
+  "converted_service_name",
+  "converted_at",
+  "post_visit_outcome_reason",
+  "contacto_futuro",
+  "whatsapp_blocked",
+  "whatsapp_blocked_reason",
+  "whatsapp_blocked_at",
+  "whatsapp_blocked_by_user_id",
+  "first_call_answered",
+  "second_call_answered",
+  "whatsapp_handoff_needed",
+  "has_scheduled_appointment",
+  "stage_key",
+  "ab_variant",
+  "last_contact_at",
+  "next_action_at",
+] as const;
+
+const FULL_LEAD_SELECT_FIELDS = [...REQUIRED_LEAD_FIELDS, ...OPTIONAL_LEAD_FIELDS];
 
 function formatDateTime(value?: string | null) {
   if (!value) return "—";
@@ -100,6 +135,114 @@ function managedByBadgeVariant(value?: Lead["managed_by"] | null) {
   if (value === "humano") return "warning" as const;
   if (value === "IA") return "success" as const;
   return "default" as const;
+}
+
+function extractMissingColumn(message?: string | null) {
+  if (!message) return null;
+  const quotedMatch = message.match(/'([^']+)' column/);
+  if (quotedMatch?.[1]) return quotedMatch[1];
+  const relationMatch = message.match(/column \"([^\"]+)\" of relation/);
+  if (relationMatch?.[1]) return relationMatch[1];
+  const schemaMatch = message.match(/column (?:[a-zA-Z0-9_]+\.)?([a-zA-Z0-9_]+) does not exist/);
+  if (schemaMatch?.[1]) return schemaMatch[1];
+  const simpleMatch = message.match(/column \"?([a-zA-Z0-9_]+)\"? does not exist/);
+  if (simpleMatch?.[1]) return simpleMatch[1];
+  return null;
+}
+
+function ensureLeadShape(record: Partial<Lead>): Lead {
+  const createdAt =
+    typeof record.created_at === "string" && record.created_at
+      ? record.created_at
+      : new Date().toISOString();
+
+  return {
+    id: typeof record.id === "string" ? record.id : "",
+    clinic_id: typeof record.clinic_id === "string" ? record.clinic_id : "",
+    full_name: typeof record.full_name === "string" ? record.full_name : null,
+    phone: typeof record.phone === "string" ? record.phone : null,
+    treatment: typeof record.treatment === "string" ? record.treatment : null,
+    source: typeof record.source === "string" ? record.source : null,
+    managed_by: record.managed_by === "humano" || record.managed_by === "IA" ? record.managed_by : null,
+    owner_user_id: typeof record.owner_user_id === "string" ? record.owner_user_id : null,
+    status: typeof record.status === "string" && record.status ? record.status : "new",
+    intents: record.intents === "1" || record.intents === "2" ? record.intents : null,
+    converted_to_client: Boolean(record.converted_to_client),
+    converted_value_eur: record.converted_value_eur ?? null,
+    converted_service_name:
+      typeof record.converted_service_name === "string" ? record.converted_service_name : null,
+    converted_at: typeof record.converted_at === "string" ? record.converted_at : null,
+    post_visit_outcome_reason:
+      typeof record.post_visit_outcome_reason === "string" ? record.post_visit_outcome_reason : null,
+    contacto_futuro: typeof record.contacto_futuro === "string" ? record.contacto_futuro : null,
+    whatsapp_blocked: Boolean(record.whatsapp_blocked),
+    whatsapp_blocked_reason:
+      typeof record.whatsapp_blocked_reason === "string" ? record.whatsapp_blocked_reason : null,
+    whatsapp_blocked_at: typeof record.whatsapp_blocked_at === "string" ? record.whatsapp_blocked_at : null,
+    whatsapp_blocked_by_user_id:
+      typeof record.whatsapp_blocked_by_user_id === "string" ? record.whatsapp_blocked_by_user_id : null,
+    first_call_answered:
+      typeof record.first_call_answered === "boolean" ? record.first_call_answered : null,
+    second_call_answered:
+      typeof record.second_call_answered === "boolean" ? record.second_call_answered : null,
+    whatsapp_handoff_needed: Boolean(record.whatsapp_handoff_needed),
+    has_scheduled_appointment: Boolean(record.has_scheduled_appointment),
+    stage_key: typeof record.stage_key === "string" ? record.stage_key : null,
+    ab_variant: record.ab_variant === "A" || record.ab_variant === "B" ? record.ab_variant : null,
+    last_contact_at: typeof record.last_contact_at === "string" ? record.last_contact_at : null,
+    next_action_at: typeof record.next_action_at === "string" ? record.next_action_at : null,
+    created_at: createdAt,
+    updated_at:
+      typeof record.updated_at === "string" && record.updated_at ? record.updated_at : createdAt,
+  };
+}
+
+function inferManagedByFromConversation(lead: Lead, threads: WaThread[]) {
+  const normalizedLeadPhone = normalizeEsPhone(lead.phone) || lead.phone || null;
+  const relatedThreads = threads.filter((thread) => {
+    if (thread.lead_id && thread.lead_id === lead.id) return true;
+    if (!normalizedLeadPhone) return false;
+    return thread.phone_e164 === normalizedLeadPhone;
+  });
+
+  if (lead.whatsapp_blocked || relatedThreads.some((thread) => thread.hitl_active)) {
+    return "humano" as const;
+  }
+
+  if (relatedThreads.length > 0) {
+    return "IA" as const;
+  }
+
+  return lead.managed_by;
+}
+
+async function updateLeadWithCompat(supabase: ReturnType<typeof createSupabaseBrowserClient>, leadId: string, payload: Record<string, unknown>) {
+  const sanitizedPayload = { ...payload };
+
+  for (let attempt = 0; attempt < OPTIONAL_LEAD_FIELDS.length + 2; attempt++) {
+    const { data, error } = await supabase
+      .from("leads")
+      .update(sanitizedPayload)
+      .eq("id", leadId)
+      .select("*")
+      .single();
+
+    if (!error && data) {
+      return { data: ensureLeadShape(data as Partial<Lead>), error: null };
+    }
+
+    const missingColumn = extractMissingColumn(error?.message);
+    if (!missingColumn || !(missingColumn in sanitizedPayload)) {
+      return { data: null, error };
+    }
+
+    delete sanitizedPayload[missingColumn as keyof typeof sanitizedPayload];
+  }
+
+  return {
+    data: null,
+    error: { message: "No se pudieron guardar los cambios del lead por incompatibilidad de esquema." },
+  };
 }
 
 function ownerLabel(ownerUserId: string | null | undefined, members: Profile[]) {
@@ -325,36 +468,56 @@ export function CrmWorkspace() {
 
     const fetchAllLeads = async () => {
       const pageSize = 1000;
-      let from = 0;
-      let hasMore = true;
-      const collected: Lead[] = [];
+      let selectFields: string[] = [...FULL_LEAD_SELECT_FIELDS];
 
-      while (hasMore) {
-        const { data, error } = await supabase
-          .from("leads")
-          .select(LEAD_SELECT_FIELDS)
-          .eq("clinic_id", clinicId)
-          .order("updated_at", { ascending: false })
-          .range(from, from + pageSize - 1);
+      for (let attempt = 0; attempt < OPTIONAL_LEAD_FIELDS.length + 2; attempt++) {
+        let from = 0;
+        let hasMore = true;
+        let retryWithFewerFields = false;
+        const collected: Lead[] = [];
 
-        if (error) {
-          return { data: null as Lead[] | null, error };
+        while (hasMore) {
+          const { data, error } = await supabase
+            .from("leads")
+            .select(selectFields.join(", "))
+            .eq("clinic_id", clinicId)
+            .order("updated_at", { ascending: false })
+            .range(from, from + pageSize - 1);
+
+          if (error) {
+            const missingColumn = extractMissingColumn(error.message);
+            if (missingColumn && selectFields.includes(missingColumn)) {
+              selectFields = selectFields.filter((field) => field !== missingColumn);
+              retryWithFewerFields = true;
+              break;
+            }
+
+            return { data: null as Lead[] | null, error };
+          }
+
+          const chunk = ((data || []) as Partial<Lead>[]).map(ensureLeadShape);
+          collected.push(...chunk);
+
+          if (chunk.length < pageSize) {
+            hasMore = false;
+          } else {
+            from += pageSize;
+          }
         }
 
-        const chunk = (data || []) as Lead[];
-        collected.push(...chunk);
-
-        if (chunk.length < pageSize) {
-          hasMore = false;
-        } else {
-          from += pageSize;
+        if (!retryWithFewerFields) {
+          const removedAnyOptional = FULL_LEAD_SELECT_FIELDS.length !== selectFields.length;
+          return { data: collected, error: null, removedAnyOptional };
         }
       }
 
-      return { data: collected, error: null };
+      return {
+        data: null as Lead[] | null,
+        error: { message: "No se pudieron cargar los leads por incompatibilidad de esquema." },
+      };
     };
 
-    const [leadsResult, stagesResult, membersResult] = await Promise.all([
+    const [leadsResult, stagesResult, membersResult, threadsResult] = await Promise.all([
       fetchAllLeads(),
       supabase
         .from("lead_stage_catalog")
@@ -365,6 +528,10 @@ export function CrmWorkspace() {
       supabase
         .from("profiles")
         .select("user_id, clinic_id, role, full_name")
+        .eq("clinic_id", clinicId),
+      supabase
+        .from("wa_threads")
+        .select("id, clinic_id, lead_id, phone_e164, state, last_outbound_message_id, hitl_active, updated_at, created_at")
         .eq("clinic_id", clinicId),
     ]);
 
@@ -379,11 +546,19 @@ export function CrmWorkspace() {
       return;
     }
 
-    const nextLeads = (leadsResult.data || []) as Lead[];
+    const threadList = threadsResult.error ? [] : ((threadsResult.data || []) as WaThread[]);
+    const nextLeads = ((leadsResult.data || []) as Lead[]).map((lead) => ({
+      ...lead,
+      managed_by: inferManagedByFromConversation(lead, threadList),
+    }));
+
     setLeads(nextLeads);
     setStageOptions((stagesResult.data || []) as StageOption[]);
     setTeamMembers((membersResult.data || []) as Profile[]);
     setSelectedLeadId((current) => current || nextLeads[0]?.id || null);
+    if ("removedAnyOptional" in leadsResult && leadsResult.removedAnyOptional) {
+      setSuccess("Clientes se ha cargado con compatibilidad de esquema en producción.");
+    }
     setLoadingLeads(false);
   }, [clinicId, supabase]);
 
@@ -583,12 +758,7 @@ export function CrmWorkspace() {
       updated_at: new Date().toISOString(),
     };
 
-    const { data, error: updateError } = await supabase
-      .from("leads")
-      .update(payload)
-      .eq("id", selectedLead.id)
-      .select(LEAD_SELECT_FIELDS)
-      .single();
+    const { data, error: updateError } = await updateLeadWithCompat(supabase, selectedLead.id, payload);
 
     if (updateError || !data) {
       setError(updateError?.message || "No se pudieron guardar los cambios del lead.");
@@ -596,7 +766,12 @@ export function CrmWorkspace() {
       return;
     }
 
-    setLeads((current) => current.map((lead) => (lead.id === selectedLead.id ? (data as Lead) : lead)));
+    const enrichedLead = {
+      ...data,
+      managed_by: inferManagedByFromConversation(data, waThreads),
+    };
+
+    setLeads((current) => current.map((lead) => (lead.id === selectedLead.id ? enrichedLead : lead)));
     setSuccess("Lead actualizado correctamente.");
     setSavingLead(false);
   };
@@ -685,7 +860,7 @@ export function CrmWorkspace() {
         .from("leads")
         .update({ next_action_at: dueAtIso, updated_at: new Date().toISOString() })
         .eq("id", selectedLead.id)
-        .select(LEAD_SELECT_FIELDS)
+        .select("*")
         .single(),
     ]);
 
@@ -701,7 +876,11 @@ export function CrmWorkspace() {
         (a, b) => new Date(a.due_at).getTime() - new Date(b.due_at).getTime()
       );
     });
-    setLeads((current) => current.map((lead) => (lead.id === selectedLead.id ? (leadResult.data as Lead) : lead)));
+    const refreshedLead = {
+      ...ensureLeadShape(leadResult.data as Partial<Lead>),
+      managed_by: inferManagedByFromConversation(ensureLeadShape(leadResult.data as Partial<Lead>), waThreads),
+    };
+    setLeads((current) => current.map((lead) => (lead.id === selectedLead.id ? refreshedLead : lead)));
     setSuccess("Próxima acción guardada.");
     setSavingNextAction(false);
   };
@@ -723,7 +902,7 @@ export function CrmWorkspace() {
         .from("leads")
         .update({ next_action_at: null, updated_at: new Date().toISOString() })
         .eq("id", selectedLead.id)
-        .select(LEAD_SELECT_FIELDS)
+        .select("*")
         .single(),
     ]);
 
@@ -736,7 +915,11 @@ export function CrmWorkspace() {
     setNextActions([]);
     setNextActionDueDraft("");
     setNextActionNoteDraft("");
-    setLeads((current) => current.map((lead) => (lead.id === selectedLead.id ? (leadResult.data as Lead) : lead)));
+    const refreshedLead = {
+      ...ensureLeadShape(leadResult.data as Partial<Lead>),
+      managed_by: inferManagedByFromConversation(ensureLeadShape(leadResult.data as Partial<Lead>), waThreads),
+    };
+    setLeads((current) => current.map((lead) => (lead.id === selectedLead.id ? refreshedLead : lead)));
     setSuccess("Próxima acción eliminada.");
     setSavingNextAction(false);
   };
@@ -850,6 +1033,12 @@ export function CrmWorkspace() {
           <p className="text-xs text-muted-foreground">
             {filteredLeads.length} visibles · {leads.length} totales en base de datos
           </p>
+          {(error || success) ? (
+            <div className="flex flex-wrap gap-2">
+              {error ? <Badge variant="danger">{error}</Badge> : null}
+              {success ? <Badge variant="success">{success}</Badge> : null}
+            </div>
+          ) : null}
         </CardHeader>
         <CardContent className="max-h-[calc(100vh-14rem)] overflow-y-auto p-0">
           {filteredLeads.length ? (
@@ -1258,6 +1447,7 @@ export function CrmWorkspace() {
                   En esta vista podremos revisar el estado actual del lead, asignar responsable, programar la próxima acción,
                   tomar notas y ver la conversación completa de WhatsApp sin salir de Clientes.
                 </p>
+                {error ? <Badge variant="danger">{error}</Badge> : null}
               </div>
             </CardContent>
           </Card>
