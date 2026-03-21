@@ -230,8 +230,7 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
 
 interface PipelineColumn {
   id:
-    | "new_lead"
-    | "recontact"
+    | "first_contact"
     | "active_conversation"
     | "visit_scheduled"
     | "visit_no_show"
@@ -246,21 +245,15 @@ interface PipelineColumn {
 
 const SIMPLIFIED_PIPELINE_COLUMNS: PipelineColumn[] = [
   {
-    id: "new_lead",
-    label: "Nuevo lead",
-    description: "Entradas nuevas pendientes de primer contacto.",
+    id: "first_contact",
+    label: "Primer contacto realizado",
+    description: "Hubo intento o primer toque, pero todavía no hay conversación útil activa.",
     representativeStageKey: "new_lead",
-  },
-  {
-    id: "recontact",
-    label: "Recontactar",
-    description: "No se ha logrado conversación útil o toca reintento.",
-    representativeStageKey: "second_call_scheduled",
   },
   {
     id: "active_conversation",
     label: "Conversación activa",
-    description: "Llamada o WhatsApp en curso con oportunidad real de agendar.",
+    description: "Ya existe intercambio real con el lead o revisión humana en curso.",
     representativeStageKey: "whatsapp_conversation_active",
   },
   {
@@ -271,7 +264,7 @@ const SIMPLIFIED_PIPELINE_COLUMNS: PipelineColumn[] = [
   },
   {
     id: "visit_no_show",
-    label: "No asistió",
+    label: "No asistió a cita",
     description: "Leads que faltaron a su visita y requieren recuperación.",
     representativeStageKey: "visit_no_show",
   },
@@ -302,15 +295,15 @@ const SIMPLIFIED_PIPELINE_COLUMNS: PipelineColumn[] = [
 ];
 
 const PIPELINE_COLUMN_FROM_STAGE: Record<string, PipelineColumn["id"]> = {
-  new_lead: "new_lead",
-  first_call_in_progress: "recontact",
-  no_answer_first_call: "recontact",
-  second_call_scheduled: "recontact",
-  second_call_in_progress: "recontact",
-  no_answer_second_call: "recontact",
-  contacting_whatsapp: "active_conversation",
+  new_lead: "first_contact",
+  first_call_in_progress: "first_contact",
+  no_answer_first_call: "first_contact",
+  second_call_scheduled: "first_contact",
+  second_call_in_progress: "first_contact",
+  no_answer_second_call: "first_contact",
+  contacting_whatsapp: "first_contact",
   whatsapp_conversation_active: "active_conversation",
-  whatsapp_followup_pending: "active_conversation",
+  whatsapp_followup_pending: "first_contact",
   whatsapp_failed_team_review: "active_conversation",
   visit_scheduled: "visit_scheduled",
   visit_no_show: "visit_no_show",
@@ -321,6 +314,20 @@ const PIPELINE_COLUMN_FROM_STAGE: Record<string, PipelineColumn["id"]> = {
   not_interested: "lost",
   discarded: "lost",
 };
+
+type ManagedByFilter = "all" | "humano" | "IA" | "unassigned";
+
+function managedByLabel(value?: Lead["managed_by"] | null) {
+  if (value === "humano") return "Clínica";
+  if (value === "IA") return "IA";
+  return "Sin asignar";
+}
+
+function managedByBadgeVariant(value?: Lead["managed_by"] | null) {
+  if (value === "humano") return "warning" as const;
+  if (value === "IA") return "success" as const;
+  return "default" as const;
+}
 
 function toLocalDate(value: string) {
   return formatClinicDateTime(value, {
@@ -362,11 +369,16 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
         <p className="truncate text-xs text-muted-foreground">{lead.phone || "Sin telefono"}</p>
         <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{lead.source || "meta"}</p>
       </div>
-      {lead.whatsapp_blocked ? (
-        <div className="mt-2">
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        <Badge variant={managedByBadgeVariant(lead.managed_by)}>{managedByLabel(lead.managed_by)}</Badge>
+        {lead.stage_key === "whatsapp_failed_team_review" ? (
+          <Badge variant="warning">Revisión equipo</Badge>
+        ) : null}
+        {lead.stage_key === "visit_no_show" ? <Badge variant="danger">No-show</Badge> : null}
+        {lead.whatsapp_blocked ? (
           <Badge variant="warning">WhatsApp bloqueado</Badge>
-        </div>
-      ) : null}
+        ) : null}
+      </div>
       {lead.stage_key === "post_visit_not_closed" && lead.post_visit_outcome_reason ? (
         <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
           Motivo: {lead.post_visit_outcome_reason}
@@ -379,6 +391,38 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
         </p>
       ) : null}
     </button>
+  );
+}
+
+function ManagedByFilterControls({
+  value,
+  onChange,
+}: {
+  value: ManagedByFilter;
+  onChange: (value: ManagedByFilter) => void;
+}) {
+  const options: Array<{ value: ManagedByFilter; label: string }> = [
+    { value: "all", label: "Todos" },
+    { value: "humano", label: "Clínica" },
+    { value: "IA", label: "IA" },
+    { value: "unassigned", label: "Sin asignar" },
+  ];
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Gestión</p>
+      {options.map((option) => (
+        <Button
+          key={option.value}
+          type="button"
+          size="sm"
+          variant={value === option.value ? "default" : "outline"}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </div>
   );
 }
 
@@ -449,6 +493,7 @@ export function PipelineBoard() {
   const [savingLeadConversion, setSavingLeadConversion] = useState(false);
   const [leadConversionError, setLeadConversionError] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
+  const [managedByFilter, setManagedByFilter] = useState<ManagedByFilter>("all");
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -487,10 +532,19 @@ export function PipelineBoard() {
   const resolvePipelineColumnKey = useCallback(
     (lead: Pick<Lead, "stage_key" | "status" | "intents">) => {
       const stageKey = resolveStageKey(lead);
-      return PIPELINE_COLUMN_FROM_STAGE[stageKey] || "new_lead";
+      return PIPELINE_COLUMN_FROM_STAGE[stageKey] || "first_contact";
     },
     [resolveStageKey]
   );
+
+  const filteredLeads = useMemo(() => {
+    return leads.filter((lead) => {
+      if (managedByFilter === "humano") return lead.managed_by === "humano";
+      if (managedByFilter === "IA") return lead.managed_by === "IA";
+      if (managedByFilter === "unassigned") return !lead.managed_by;
+      return true;
+    });
+  }, [leads, managedByFilter]);
 
   const grouped = useMemo(() => {
     const map: Record<string, Lead[]> = {};
@@ -498,13 +552,13 @@ export function PipelineBoard() {
       map[column.id] = [];
     }
 
-    for (const lead of leads) {
+    for (const lead of filteredLeads) {
       const columnKey = resolvePipelineColumnKey(lead);
       if (map[columnKey]) map[columnKey].push(lead);
     }
 
     return map;
-  }, [leads, pipelineColumns, resolvePipelineColumnKey]);
+  }, [filteredLeads, pipelineColumns, resolvePipelineColumnKey]);
 
   const loadStages = useCallback(async () => {
     const { data } = await supabase
@@ -786,14 +840,24 @@ export function PipelineBoard() {
       <CelebrationOverlay open={showCelebration} />
       <div className="mb-4 rounded-xl border border-border bg-muted/20 p-3">
         <p className="text-sm font-semibold">Pipeline comercial simplificado</p>
-        <p className="text-xs text-muted-foreground">Una vista clara para clínica: recontacto, conversación, cita y cierre.</p>
+        <p className="text-xs text-muted-foreground">
+          Ocho estados operativos para clínica: primer contacto, conversación, cita, no-show y cierre.
+        </p>
       </div>
 
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
         <div className="space-y-2">
-          <div className="flex items-center justify-between rounded-xl border border-border bg-white px-4 py-3">
-            <p className="text-sm font-semibold">Estado actual de oportunidades</p>
-            <Badge variant="soft">{leads.length} leads</Badge>
+          <div className="flex flex-col gap-3 rounded-xl border border-border bg-white px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold">Estado actual de oportunidades</p>
+              <p className="text-xs text-muted-foreground">
+                {filteredLeads.length} visibles de {leads.length} leads totales
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <ManagedByFilterControls value={managedByFilter} onChange={setManagedByFilter} />
+              <Badge variant="soft">{filteredLeads.length} leads</Badge>
+            </div>
           </div>
 
           <div className="overflow-x-auto pb-2">
@@ -831,10 +895,27 @@ export function PipelineBoard() {
 
               <div className="grid gap-4">
                 <Card className="p-4">
-                  <p className="text-xs text-muted-foreground">Etapa actual</p>
+                  <p className="text-xs text-muted-foreground">Etapa visible</p>
                   <p className="text-sm font-medium">
                     {columnMap.get(resolvePipelineColumnKey(activeLead))?.label || stageMap.get(resolveStageKey(activeLead))?.label_es || resolveStageKey(activeLead) || "Sin etapa"}
                   </p>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-muted-foreground">Estado interno</p>
+                  <p className="text-sm font-medium">
+                    {stageMap.get(resolveStageKey(activeLead))?.label_es || resolveStageKey(activeLead) || "Sin etapa"}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{resolveStageKey(activeLead)}</p>
+                </Card>
+                <Card className="p-4">
+                  <p className="text-xs text-muted-foreground">Gestión actual</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Badge variant={managedByBadgeVariant(activeLead.managed_by)}>{managedByLabel(activeLead.managed_by)}</Badge>
+                    {resolveStageKey(activeLead) === "whatsapp_failed_team_review" ? (
+                      <Badge variant="warning">Revisión equipo</Badge>
+                    ) : null}
+                    {resolveStageKey(activeLead) === "visit_no_show" ? <Badge variant="danger">No-show</Badge> : null}
+                  </div>
                 </Card>
                 <Card className="p-4">
                   <p className="text-xs text-muted-foreground">Telefono</p>
