@@ -112,7 +112,7 @@ export async function POST(request: Request) {
       appointment_title: appointment.title,
       appointment_start_at: appointment.start_at,
       appointment_end_at: appointment.end_at,
-      appointment_status: appointment.status,
+      appointment_status: "no_show",
       appointment_source_channel:
         "source_channel" in appointment && typeof appointment.source_channel === "string"
           ? appointment.source_channel
@@ -156,7 +156,7 @@ export async function POST(request: Request) {
   const mergedNotes = buildNoShowNotes(appointment.notes, reason);
   await admin
     .from("appointments")
-    .update({ notes: mergedNotes || null })
+    .update({ status: "no_show", notes: mergedNotes || null })
     .eq("clinic_id", profile.clinic_id)
     .eq("id", appointment.id);
 

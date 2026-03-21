@@ -95,6 +95,7 @@ export async function POST(request: Request) {
     source_channel: sourceChannel,
     created_by: payload.created_by || "agent",
     created_at: payload.created_at || new Date().toISOString(),
+    ...(payload.status ? { status: appointmentStatus } : {}),
   };
 
   const { data: appointment, error } = await persistAppointmentWithCompat({
@@ -128,6 +129,22 @@ export async function POST(request: Request) {
       .update({ last_contact_at: new Date().toISOString(), next_action_at: null })
       .eq("clinic_id", clinicId)
       .eq("id", resolvedLead.leadId);
+  }
+
+  if (resolvedLead.leadId && appointmentStatus === "no_show") {
+    await transitionLeadStage({
+      supabase,
+      clinicId,
+      leadId: resolvedLead.leadId,
+      toStageKey: "visit_no_show",
+      reason: "Cita marcada como no-show desde webhook",
+      actorType: sourceChannel,
+      actorId: payload.call_id || null,
+      meta: {
+        appointment_id: appointment.id,
+        source_channel: sourceChannel,
+      },
+    });
   }
 
   return NextResponse.json({

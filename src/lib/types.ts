@@ -64,7 +64,7 @@ export interface Appointment {
   title: string | null;
   start_at: string;
   end_at: string;
-  status: "scheduled" | "canceled" | "done";
+  status: "scheduled" | "canceled" | "done" | "no_show";
   reminder_2d_status: "no_enviado" | "enviado";
   reminder_1d_status: "no_enviado" | "enviado";
   reminder_1h_status: "no_enviado" | "enviado";
@@ -175,6 +175,21 @@ export interface AgentRuntimeControls {
   updated_by_user_id: string | null;
   updated_at: string;
   created_at: string;
+}
+
+export interface AgentSystemPrompt {
+  id: string;
+  clinic_id: string;
+  agent_key: string;
+  agent_label: string;
+  version_no: number;
+  status: "main" | "archived";
+  prompt: string;
+  created_by_user_id: string | null;
+  activated_at: string | null;
+  archived_at: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface LeadAbTestSettings {

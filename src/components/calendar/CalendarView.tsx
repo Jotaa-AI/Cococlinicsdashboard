@@ -25,7 +25,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { CLOSE_HOUR, OPEN_HOUR, SLOT_MINUTES, validateBusyBlockRange, validateSlotRange } from "@/lib/calendar/slot-rules";
 import { CLINIC_TIMEZONE, formatClinicDateTime, toClinicDateInputValue, toClinicTimeInputValue, zonedDateTimeToUtcIso } from "@/lib/datetime/clinicTime";
-import { isNoShowAppointment } from "@/lib/appointments/no-show";
+import { isNoShowAppointmentRecord } from "@/lib/appointments/no-show";
 
 type EntryType = "appointment" | "busy_block";
 
@@ -83,7 +83,7 @@ function buildAppointmentTitle(item: Appointment) {
   const label = item.lead_name || item.title || "Cita";
   const treatment = item.title && item.lead_name ? item.title : null;
   const baseTitle = treatment ? `${label} · ${treatment}` : label;
-  return isNoShowAppointment(item.notes) ? `No asistió · ${baseTitle}` : baseTitle;
+  return isNoShowAppointmentRecord(item) ? `No asistió · ${baseTitle}` : baseTitle;
 }
 
 function getDefaultSlotStart(date: Date) {
@@ -144,7 +144,7 @@ function getAppointmentColors(item: Appointment) {
     };
   }
 
-  if (isNoShowAppointment(item.notes)) {
+  if (isNoShowAppointmentRecord(item)) {
     return {
       backgroundColor: "#d1485f",
       borderColor: "#d1485f",
@@ -157,6 +157,13 @@ function getAppointmentColors(item: Appointment) {
     borderColor: "#233b57",
     textColor: "#fff",
   };
+}
+
+function formatAppointmentStatusLabel(status: Appointment["status"]) {
+  if (status === "no_show") return "No-show";
+  if (status === "scheduled") return "Programada";
+  if (status === "done") return "Realizada";
+  return "Cancelada";
 }
 
 export function CalendarView() {
@@ -618,7 +625,7 @@ export function CalendarView() {
                 </div>
 
                 <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">
-                  {appointment.status}
+                    {formatAppointmentStatusLabel(appointment.status)}
                 </span>
               </div>
             ))}

@@ -152,6 +152,13 @@ function managedByBadgeVariant(value?: Lead["managed_by"] | null) {
   return "default" as const;
 }
 
+function appointmentStatusLabel(status: Appointment["status"]) {
+  if (status === "scheduled") return "programada";
+  if (status === "done") return "realizada";
+  if (status === "no_show") return "no-show";
+  return "cancelada";
+}
+
 function extractMissingColumn(message?: string | null) {
   if (!message) return null;
   const quotedMatch = message.match(/'([^']+)' column/);
@@ -1007,12 +1014,20 @@ export function CrmWorkspace() {
       created_at: note.created_at,
     }));
 
-    const appointmentItems: TimelineItem[] = appointments.map((appointment) => ({
+  const appointmentItems: TimelineItem[] = appointments.map((appointment) => ({
       id: `appointment-${appointment.id}`,
       type: "appointment",
       title: appointment.title || "Cita",
-      body: `${appointment.status === "scheduled" ? "Cita programada" : appointment.status === "done" ? "Cita realizada" : "Cita cancelada"} · ${formatDateTime(appointment.start_at)}`,
-      meta: `${appointment.source_channel || "sin canal"} · ${appointment.status}`,
+      body: `${
+        appointment.status === "scheduled"
+          ? "Cita programada"
+          : appointment.status === "done"
+            ? "Cita realizada"
+            : appointment.status === "no_show"
+              ? "Lead no asistió a la cita"
+              : "Cita cancelada"
+      } · ${formatDateTime(appointment.start_at)}`,
+      meta: `${appointment.source_channel || "sin canal"} · ${appointmentStatusLabel(appointment.status)}`,
       created_at: appointment.created_at || appointment.start_at,
     }));
 
