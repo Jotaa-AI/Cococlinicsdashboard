@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Bot,
+  Building2,
   CalendarDays,
+  LayoutList,
   Link as LinkIcon,
   MessageSquareText,
   NotebookPen,
@@ -10,6 +13,7 @@ import {
   RefreshCw,
   Save,
   Search,
+  SlidersHorizontal,
   UserRound,
 } from "lucide-react";
 import Link from "next/link";
@@ -117,6 +121,17 @@ function formatDuration(seconds?: number | null) {
   return `${Math.round(seconds / 60)} min`;
 }
 
+function formatListTimestamp(value?: string | null) {
+  if (!value) return "Sin actividad";
+  return formatClinicDateTime(value, {
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
 function managedByLabel(value?: Lead["managed_by"] | null) {
   if (value === "humano") return "Clínica";
   if (value === "IA") return "IA";
@@ -148,6 +163,16 @@ function extractMissingColumn(message?: string | null) {
   const simpleMatch = message.match(/column \"?([a-zA-Z0-9_]+)\"? does not exist/);
   if (simpleMatch?.[1]) return simpleMatch[1];
   return null;
+}
+
+function isMissingSchemaResource(message?: string | null) {
+  if (!message) return false;
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("schema cache") ||
+    normalized.includes("does not exist") ||
+    normalized.includes("could not find the table")
+  );
 }
 
 function ensureLeadShape(record: Partial<Lead>): Lead {
@@ -411,6 +436,24 @@ function parseDatetimeLocalInput(value: string) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+function MetricTile({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-2xl border border-border bg-white px-4 py-4 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">{label}</p>
+      <p className="mt-2 text-lg font-semibold text-foreground">{value}</p>
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-border/70 py-3 last:border-b-0">
+      <p className="text-sm text-muted-foreground">{label}</p>
+      <p className="max-w-[60%] text-right text-sm font-medium text-foreground">{value}</p>
+    </div>
+  );
+}
+
 export function CrmWorkspace() {
   const supabase = createSupabaseBrowserClient();
   const { profile, loading: profileLoading } = useProfile();
@@ -442,6 +485,8 @@ export function CrmWorkspace() {
   const [savingNextAction, setSavingNextAction] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [notesAvailable, setNotesAvailable] = useState(true);
+  const [nextActionsAvailable, setNextActionsAvailable] = useState(true);
 
   const selectedLead = useMemo(
     () => leads.find((lead) => lead.id === selectedLeadId) || null,
@@ -556,9 +601,6 @@ export function CrmWorkspace() {
     setStageOptions((stagesResult.data || []) as StageOption[]);
     setTeamMembers((membersResult.data || []) as Profile[]);
     setSelectedLeadId((current) => current || nextLeads[0]?.id || null);
-    if ("removedAnyOptional" in leadsResult && leadsResult.removedAnyOptional) {
-      setSuccess("Clientes se ha cargado con compatibilidad de esquema en producción.");
-    }
     setLoadingLeads(false);
   }, [clinicId, supabase]);
 
@@ -625,20 +667,33 @@ export function CrmWorkspace() {
       if (
         appointmentsResult.error ||
         callsResult.error ||
-        notesResult.error ||
-        nextActionsResult.error ||
         threadsByLeadResult.error ||
         threadsByPhoneResult.error
       ) {
         setError(
           appointmentsResult.error?.message ||
             callsResult.error?.message ||
-            notesResult.error?.message ||
-            nextActionsResult.error?.message ||
             threadsByLeadResult.error?.message ||
             threadsByPhoneResult.error?.message ||
             "No se pudieron cargar los detalles del lead."
         );
+        setLoadingDetails(false);
+        return;
+      }
+
+      const notesTableMissing = Boolean(notesResult.error && isMissingSchemaResource(notesResult.error.message));
+      const nextActionsTableMissing = Boolean(
+        nextActionsResult.error && isMissingSchemaResource(nextActionsResult.error.message)
+      );
+
+      if (notesResult.error && !notesTableMissing) {
+        setError(notesResult.error.message || "No se pudieron cargar las notas del lead.");
+        setLoadingDetails(false);
+        return;
+      }
+
+      if (nextActionsResult.error && !nextActionsTableMissing) {
+        setError(nextActionsResult.error.message || "No se pudo cargar la próxima acción del lead.");
         setLoadingDetails(false);
         return;
       }
@@ -672,10 +727,16 @@ export function CrmWorkspace() {
 
       setAppointments((appointmentsResult.data || []) as Appointment[]);
       setCalls((callsResult.data || []) as Call[]);
-      setNotes((notesResult.data || []) as LeadNote[]);
-      setNextActions((nextActionsResult.data || []) as LeadNextAction[]);
+      setNotes(notesTableMissing ? [] : ((notesResult.data || []) as LeadNote[]));
+      setNextActions(nextActionsTableMissing ? [] : ((nextActionsResult.data || []) as LeadNextAction[]));
       setWaThreads(nextThreads);
       setWaMessages(messagesResultData);
+      setNotesAvailable(!notesTableMissing);
+      setNextActionsAvailable(!nextActionsTableMissing);
+
+      if (notesTableMissing || nextActionsTableMissing) {
+        setError(null);
+      }
       setLoadingDetails(false);
     },
     [clinicId, supabase]
@@ -778,6 +839,10 @@ export function CrmWorkspace() {
 
   const addNote = async () => {
     if (!selectedLead || !clinicId) return;
+    if (!notesAvailable) {
+      setError("Las notas internas aún no están disponibles en producción. Falta crear la tabla lead_notes en Supabase.");
+      return;
+    }
     const trimmed = noteDraft.trim();
     if (!trimmed) return;
 
@@ -811,6 +876,10 @@ export function CrmWorkspace() {
 
   const saveNextAction = async () => {
     if (!selectedLead || !clinicId) return;
+    if (!nextActionsAvailable) {
+      setError("La próxima acción aún no está disponible en producción. Falta crear la tabla lead_next_actions en Supabase.");
+      return;
+    }
     const dueAtIso = parseDatetimeLocalInput(nextActionDueDraft);
     if (!dueAtIso) {
       setError("Necesitas indicar fecha y hora para la próxima acción.");
@@ -887,6 +956,10 @@ export function CrmWorkspace() {
 
   const clearNextAction = async () => {
     if (!selectedLead || !clinicId) return;
+    if (!nextActionsAvailable) {
+      setError("La próxima acción aún no está disponible en producción. Falta crear la tabla lead_next_actions en Supabase.");
+      return;
+    }
     setSavingNextAction(true);
     setError(null);
     setSuccess(null);
@@ -984,95 +1057,187 @@ export function CrmWorkspace() {
     ];
   }, [selectedLead?.stage_key, stageOptions]);
 
+  const availabilityNotices = useMemo(() => {
+    const notices: string[] = [];
+    if (!notesAvailable) {
+      notices.push("Las notas internas todavía no están habilitadas en esta base de datos. Falta la tabla lead_notes.");
+    }
+    if (!nextActionsAvailable) {
+      notices.push("La próxima acción todavía no está habilitada en esta base de datos. Falta la tabla lead_next_actions.");
+    }
+    return notices;
+  }, [nextActionsAvailable, notesAvailable]);
+
+  const leadCounts = useMemo(
+    () => ({
+      all: leads.length,
+      humano: leads.filter((lead) => lead.managed_by === "humano").length,
+      IA: leads.filter((lead) => lead.managed_by === "IA").length,
+      unassigned: leads.filter((lead) => !lead.managed_by).length,
+    }),
+    [leads]
+  );
+
   if (profileLoading) {
     return <div className="rounded-xl border border-border bg-white p-6 text-sm text-muted-foreground">Cargando Clientes...</div>;
   }
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-border bg-[linear-gradient(180deg,rgba(244,240,230,0.95),rgba(255,255,255,0.95))]">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <CardTitle>Todos los leads</CardTitle>
+    <div className="grid gap-4 xl:grid-cols-[380px_minmax(0,1fr)]">
+      <Card className="overflow-hidden border-border/80 shadow-sm">
+        <CardHeader className="space-y-4 border-b border-border bg-[linear-gradient(180deg,rgba(244,240,230,0.96),rgba(255,255,255,0.98))] px-5 py-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="space-y-1">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.26em] text-slate-500">Vista de lista</p>
+              <CardTitle className="text-2xl">Clientes activos</CardTitle>
               <p className="text-sm text-muted-foreground">
-                Tu bandeja de Clientes para seguir el estado comercial real.
+                Filtra, abre fichas y sigue cada lead como en una lista comercial de CRM.
               </p>
             </div>
             <Button type="button" variant="outline" size="sm" className="h-10 w-10 px-0" onClick={loadLeads} disabled={loadingLeads}>
               <RefreshCw className={cn("h-4 w-4", loadingLeads && "animate-spin")} />
             </Button>
           </div>
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Buscar por nombre, teléfono o tratamiento..."
-              className="pl-9"
-            />
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {([
-              ["all", "Todos"],
-              ["humano", "Clínica"],
-              ["IA", "IA"],
-              ["unassigned", "Sin asignar"],
-            ] as const).map(([value, label]) => (
-              <Button
-                key={value}
-                type="button"
-                variant={managedByFilter === value ? "default" : "outline"}
-                size="sm"
-                onClick={() => setManagedByFilter(value)}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {filteredLeads.length} visibles · {leads.length} totales en base de datos
-          </p>
-          {(error || success) ? (
-            <div className="flex flex-wrap gap-2">
-              {error ? <Badge variant="danger">{error}</Badge> : null}
-              {success ? <Badge variant="success">{success}</Badge> : null}
+
+          <div className="grid grid-cols-3 gap-3">
+            <div className="rounded-2xl border border-border bg-white px-4 py-3 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Total</p>
+              <p className="mt-2 text-2xl font-semibold text-foreground">{leadCounts.all}</p>
             </div>
+            <div className="rounded-2xl border border-border bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-2 text-slate-500">
+                <Building2 className="h-4 w-4" />
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em]">Clínica</p>
+              </div>
+              <p className="mt-2 text-2xl font-semibold text-foreground">{leadCounts.humano}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-white px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-2 text-slate-500">
+                <Bot className="h-4 w-4" />
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em]">IA</p>
+              </div>
+              <p className="mt-2 text-2xl font-semibold text-foreground">{leadCounts.IA}</p>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Buscar por nombre, teléfono o tratamiento..."
+                className="h-11 border-transparent bg-muted/40 pl-9 shadow-none focus-visible:border-border focus-visible:bg-white"
+              />
+            </div>
+
+            <div className="mt-4 space-y-3">
+              <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-500">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Filtros de gestión
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {([
+                  ["all", "Todos", leadCounts.all],
+                  ["humano", "Clínica", leadCounts.humano],
+                  ["IA", "IA", leadCounts.IA],
+                  ["unassigned", "Sin asignar", leadCounts.unassigned],
+                ] as const).map(([value, label, count]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setManagedByFilter(value)}
+                    className={cn(
+                      "inline-flex items-center gap-2 rounded-full border px-3 py-2 text-sm font-medium transition",
+                      managedByFilter === value
+                        ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                        : "border-border bg-white text-muted-foreground hover:border-primary/30 hover:text-foreground"
+                    )}
+                  >
+                    <span>{label}</span>
+                    <span className={cn(
+                      "rounded-full px-2 py-0.5 text-xs",
+                      managedByFilter === value ? "bg-white/20 text-primary-foreground" : "bg-muted text-foreground"
+                    )}>
+                      {count}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <LayoutList className="h-3.5 w-3.5" />
+              <span>{filteredLeads.length} visibles</span>
+            </div>
+            <span>{leads.length} registros en base de datos</span>
+          </div>
+
+          {error ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
           ) : null}
         </CardHeader>
-        <CardContent className="max-h-[calc(100vh-14rem)] overflow-y-auto p-0">
+        <CardContent className="max-h-[calc(100vh-14rem)] overflow-y-auto bg-[#fcfcfd] p-0">
           {filteredLeads.length ? (
-            filteredLeads.map((lead) => (
-              <button
-                key={lead.id}
-                type="button"
-                onClick={() => setSelectedLeadId(lead.id)}
-                className={cn(
-                  "flex w-full items-start gap-3 border-b border-border px-4 py-4 text-left transition hover:bg-muted/50",
-                  selectedLeadId === lead.id && "bg-primary/5"
-                )}
-              >
-                <div className="mt-1 rounded-full border border-border bg-white p-2 text-muted-foreground">
-                  <UserRound className="h-4 w-4" />
-                </div>
-                <div className="min-w-0 flex-1 space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-foreground">{lead.full_name || lead.phone || "Lead sin nombre"}</p>
-                      <p className="text-xs text-muted-foreground">{lead.phone || "Sin teléfono"}</p>
+            <div className="divide-y divide-border/80">
+              {filteredLeads.map((lead) => (
+                <button
+                  key={lead.id}
+                  type="button"
+                  onClick={() => setSelectedLeadId(lead.id)}
+                  className={cn(
+                    "group relative w-full px-4 py-4 text-left transition hover:bg-white",
+                    selectedLeadId === lead.id && "border-l-4 border-l-primary bg-white pl-3"
+                  )}
+                >
+                  <div className="flex items-start gap-3">
+                    <div
+                      className={cn(
+                        "mt-0.5 flex h-10 w-10 items-center justify-center rounded-2xl border text-sm font-semibold shadow-sm",
+                        selectedLeadId === lead.id
+                          ? "border-primary/30 bg-primary/10 text-primary"
+                          : "border-border bg-white text-slate-500"
+                      )}
+                    >
+                      {(lead.full_name || lead.phone || "L").trim().charAt(0).toUpperCase()}
                     </div>
-                    <p className="whitespace-nowrap text-xs text-muted-foreground">{formatDateTime(lead.updated_at)}</p>
+                    <div className="min-w-0 flex-1 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-foreground">{lead.full_name || lead.phone || "Lead sin nombre"}</p>
+                          <p className="mt-0.5 text-xs text-muted-foreground">{lead.phone || "Sin teléfono"}</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">Últ. act.</p>
+                          <p className="mt-1 whitespace-nowrap text-xs text-muted-foreground">
+                            {formatListTimestamp(lead.last_contact_at || lead.updated_at || lead.created_at)}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant={stageBadgeVariant(lead.stage_key)}>
+                          {stageLabelMap.get(lead.stage_key || "") || lead.stage_key || "Sin etapa"}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">{lead.source || "Sin origen"}</span>
+                      </div>
+
+                      <p className="line-clamp-2 text-sm text-muted-foreground">
+                        {lead.treatment || "Sin tratamiento registrado"}
+                      </p>
+
+                      <div className="flex flex-wrap gap-2">
+                        <Badge variant={managedByBadgeVariant(lead.managed_by)}>{managedByLabel(lead.managed_by)}</Badge>
+                        <Badge variant="soft">{ownerLabel(lead.owner_user_id, teamMembers)}</Badge>
+                        {lead.has_scheduled_appointment ? <Badge variant="warning">Cita activa</Badge> : null}
+                      </div>
+                    </div>
                   </div>
-                  <p className="line-clamp-2 text-sm text-muted-foreground">
-                    {lead.treatment || "Sin tratamiento"} · {stageLabelMap.get(lead.stage_key || "") || lead.stage_key || "Sin etapa"}
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Badge variant={managedByBadgeVariant(lead.managed_by)}>{managedByLabel(lead.managed_by)}</Badge>
-                    <Badge variant="soft">{ownerLabel(lead.owner_user_id, teamMembers)}</Badge>
-                  </div>
-                </div>
-              </button>
-            ))
+                </button>
+              ))}
+            </div>
           ) : (
             <div className="p-6 text-sm text-muted-foreground">No hay leads que coincidan con ese filtro.</div>
           )}
@@ -1082,23 +1247,32 @@ export function CrmWorkspace() {
       <div className="space-y-4">
         {selectedLead ? (
           <>
-            <Card>
-              <CardHeader className="border-b border-border bg-[linear-gradient(180deg,rgba(244,240,230,0.95),rgba(255,255,255,0.95))]">
-                <div className="flex flex-wrap items-start justify-between gap-4">
-                  <div className="space-y-2">
+            <Card className="overflow-hidden border-border/80 shadow-sm">
+              <CardHeader className="border-b border-border bg-[linear-gradient(180deg,rgba(244,240,230,0.95),rgba(255,255,255,0.98))] px-6 py-5">
+                <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-start 2xl:justify-between">
+                  <div className="space-y-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.26em] text-slate-500">Ficha del lead</p>
                     <div className="flex flex-wrap items-center gap-3">
-                      <h2 className="text-2xl font-semibold text-foreground">{selectedLead.full_name || "Lead sin nombre"}</h2>
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full border border-border bg-white text-muted-foreground shadow-sm">
+                        <UserRound className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h2 className="text-3xl font-semibold text-foreground">{selectedLead.full_name || "Lead sin nombre"}</h2>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          {selectedLead.phone || "Sin teléfono"} · {selectedLead.treatment || "Sin tratamiento"} · {selectedLead.source || "Sin origen"}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
                       <Badge variant={managedByBadgeVariant(selectedLead.managed_by)}>{managedByLabel(selectedLead.managed_by)}</Badge>
                       <Badge variant={stageBadgeVariant(selectedLead.stage_key)}>
                         {stageLabelMap.get(selectedLead.stage_key || "") || selectedLead.stage_key || "Sin etapa"}
                       </Badge>
                       {selectedLead.whatsapp_blocked ? <Badge variant="danger">WhatsApp bloqueado</Badge> : null}
                     </div>
-                    <p className="text-sm text-muted-foreground">
-                      {selectedLead.phone || "Sin teléfono"} · {selectedLead.treatment || "Sin tratamiento"} · {selectedLead.source || "Sin origen"}
-                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
+
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button type="button" variant="outline" onClick={() => loadLeadDetails(selectedLead)} disabled={loadingDetails}>
                       <RefreshCw className={cn("mr-2 h-4 w-4", loadingDetails && "animate-spin")} />
                       Refrescar
@@ -1110,330 +1284,345 @@ export function CrmWorkspace() {
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4 pt-6">
-                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                  <div className="rounded-xl border border-border bg-white p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Creado</p>
-                    <p className="mt-2 text-sm font-medium text-foreground">{formatDateTime(selectedLead.created_at)}</p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-white p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Último contacto</p>
-                    <p className="mt-2 text-sm font-medium text-foreground">{formatDateTime(selectedLead.last_contact_at)}</p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-white p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Próxima acción</p>
-                    <p className="mt-2 text-sm font-medium text-foreground">{formatDateTime(selectedLead.next_action_at)}</p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-white p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Cita agendada</p>
-                    <p className="mt-2 text-sm font-medium text-foreground">{selectedLead.has_scheduled_appointment ? "Sí" : "No"}</p>
-                  </div>
-                  <div className="rounded-xl border border-border bg-white p-4">
-                    <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Responsable</p>
-                    <p className="mt-2 text-sm font-medium text-foreground">{ownerLabel(selectedLead.owner_user_id, teamMembers)}</p>
-                  </div>
-                </div>
 
-                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
-                  <Card className="border-border/80 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">Control comercial</CardTitle>
-                    </CardHeader>
-                    <CardContent className="grid gap-4 md:grid-cols-3">
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-foreground">Quién lo gestiona</p>
-                        <Select value={managedByDraft} onValueChange={(value) => setManagedByDraft(value as ManagedByValue)}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="humano">Clínica</SelectItem>
-                            <SelectItem value="IA">IA</SelectItem>
-                            <SelectItem value="unassigned">Sin asignar</SelectItem>
-                          </SelectContent>
-                        </Select>
+              <CardContent className="space-y-5 bg-[#fbfcfd] p-6">
+                {(error || success || availabilityNotices.length) ? (
+                  <div className="space-y-2">
+                    {error ? (
+                      <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                        {error}
                       </div>
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-foreground">Responsable del lead</p>
-                        <Select value={ownerUserIdDraft} onValueChange={setOwnerUserIdDraft}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Selecciona responsable" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="unassigned">Sin responsable</SelectItem>
-                            {teamMembers.map((member) => (
-                              <SelectItem key={member.user_id} value={member.user_id}>
-                                {member.full_name || member.user_id}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                    ) : null}
+                    {success ? (
+                      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+                        {success}
                       </div>
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-foreground">Etapa actual</p>
-                        <Select value={stageDraft || activeStageOptions[0]?.stage_key} onValueChange={setStageDraft}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Selecciona una etapa" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {activeStageOptions.map((stage) => (
-                              <SelectItem key={stage.stage_key} value={stage.stage_key}>
-                                {stage.label_es}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                    ) : null}
+                    {availabilityNotices.map((notice) => (
+                      <div key={notice} className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                        {notice}
                       </div>
-                      <div className="rounded-xl border border-border bg-muted/30 p-4 md:col-span-3">
-                        <p className="text-xs uppercase tracking-[0.18em] text-muted-foreground">Cierre comercial</p>
-                        <p className="mt-2 text-sm text-foreground">
-                          {selectedLead.converted_to_client
-                            ? `${selectedLead.converted_service_name || "Servicio sin especificar"} · ${selectedLead.converted_value_eur ?? 0} €`
-                            : selectedLead.post_visit_outcome_reason || "Aún no hay cierre registrado."}
-                        </p>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  <Card className="border-border/80 shadow-none">
-                    <CardHeader>
-                      <CardTitle className="text-base">Resumen rápido</CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3 text-sm">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Llamadas</span>
-                        <span className="font-medium text-foreground">{calls.length}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Citas</span>
-                        <span className="font-medium text-foreground">{appointments.length}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Notas</span>
-                        <span className="font-medium text-foreground">{notes.length}</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">Conversación WA</span>
-                        <span className="font-medium text-foreground">{waMessages.length} mensajes</span>
-                      </div>
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="text-muted-foreground">WhatsApp</span>
-                        <span className="font-medium text-foreground">{selectedLead.whatsapp_blocked ? "Bloqueado" : "Activo"}</span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </div>
-
-                {(error || success) ? (
-                  <div className="flex flex-wrap gap-3">
-                    {error ? <Badge variant="danger">{error}</Badge> : null}
-                    {success ? <Badge variant="success">{success}</Badge> : null}
+                    ))}
                   </div>
                 ) : null}
+
+                <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
+                  <MetricTile label="Creado" value={formatDateTime(selectedLead.created_at)} />
+                  <MetricTile label="Último contacto" value={formatDateTime(selectedLead.last_contact_at)} />
+                  <MetricTile label="Próxima acción" value={formatDateTime(selectedLead.next_action_at)} />
+                  <MetricTile label="Cita agendada" value={selectedLead.has_scheduled_appointment ? "Sí" : "No"} />
+                  <MetricTile label="Responsable" value={ownerLabel(selectedLead.owner_user_id, teamMembers)} />
+                </div>
+
+                <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.35fr)_360px]">
+                  <div className="space-y-4">
+                    <Card className="border-border/80 shadow-none">
+                      <CardHeader className="border-b border-border/80">
+                        <CardTitle className="text-base">Resumen del lead</CardTitle>
+                      </CardHeader>
+                      <CardContent className="grid gap-6 p-6 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+                        <div className="rounded-2xl border border-border bg-white px-5 py-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">Datos clave</p>
+                          <div className="mt-3">
+                            <InfoRow label="Teléfono" value={selectedLead.phone || "Sin teléfono"} />
+                            <InfoRow label="Tratamiento" value={selectedLead.treatment || "Sin tratamiento"} />
+                            <InfoRow label="Origen" value={selectedLead.source || "Sin origen"} />
+                            <InfoRow
+                              label="Estado comercial"
+                              value={stageLabelMap.get(selectedLead.stage_key || "") || selectedLead.stage_key || "Sin etapa"}
+                            />
+                            <InfoRow
+                              label="Cierre registrado"
+                              value={
+                                selectedLead.converted_to_client
+                                  ? `${selectedLead.converted_service_name || "Servicio"} · ${selectedLead.converted_value_eur ?? 0} €`
+                                  : selectedLead.post_visit_outcome_reason || "Aún no hay cierre registrado"
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        <div className="space-y-4 rounded-2xl border border-border bg-white px-5 py-4">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">Gestión comercial</p>
+                            <p className="mt-2 text-sm text-muted-foreground">
+                              Organiza responsable, etapa y quién lleva el lead sin salir de esta ficha.
+                            </p>
+                          </div>
+                          <div className="grid gap-4 md:grid-cols-3">
+                            <div className="space-y-2">
+                              <p className="text-sm font-medium text-foreground">Quién lo gestiona</p>
+                              <Select value={managedByDraft} onValueChange={(value) => setManagedByDraft(value as ManagedByValue)}>
+                                <SelectTrigger>
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="humano">Clínica</SelectItem>
+                                  <SelectItem value="IA">IA</SelectItem>
+                                  <SelectItem value="unassigned">Sin asignar</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-sm font-medium text-foreground">Responsable del lead</p>
+                              <Select value={ownerUserIdDraft} onValueChange={setOwnerUserIdDraft}>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Selecciona responsable" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  <SelectItem value="unassigned">Sin responsable</SelectItem>
+                                  {teamMembers.map((member) => (
+                                    <SelectItem key={member.user_id} value={member.user_id}>
+                                      {member.full_name || member.user_id}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-sm font-medium text-foreground">Etapa actual</p>
+                              <Select value={stageDraft || activeStageOptions[0]?.stage_key} onValueChange={setStageDraft}>
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Selecciona una etapa" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {activeStageOptions.map((stage) => (
+                                    <SelectItem key={stage.stage_key} value={stage.stage_key}>
+                                      {stage.label_es}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-border/80 shadow-none">
+                      <CardHeader className="border-b border-border/80">
+                        <CardTitle className="text-base">Próxima acción</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4 p-6">
+                        <div className="grid gap-4 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium text-foreground">Tipo de acción</p>
+                            <Select value={nextActionTypeDraft} onValueChange={(value) => setNextActionTypeDraft(value as NextActionType)}>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="notify_team">Seguimiento del equipo</SelectItem>
+                                <SelectItem value="retry_call">Reintentar llamada</SelectItem>
+                                <SelectItem value="start_whatsapp_ai">Activar WhatsApp IA</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium text-foreground">Fecha y hora</p>
+                            <Input type="datetime-local" value={nextActionDueDraft} onChange={(event) => setNextActionDueDraft(event.target.value)} />
+                          </div>
+                          <div className="space-y-2">
+                            <p className="text-sm font-medium text-foreground">Nota de la tarea</p>
+                            <Textarea
+                              rows={4}
+                              value={nextActionNoteDraft}
+                              onChange={(event) => setNextActionNoteDraft(event.target.value)}
+                              placeholder="Ej: llamar mañana a las 11:00, revisar objeción de precio, esperar confirmación del equipo..."
+                            />
+                          </div>
+                        </div>
+                        {primaryNextAction ? (
+                          <div className="rounded-2xl border border-border bg-muted/20 p-4 text-sm">
+                            <div className="flex items-center justify-between gap-3">
+                              <Badge variant={nextActionVariant(primaryNextAction.action_type)}>{nextActionLabel(primaryNextAction.action_type)}</Badge>
+                              <span className="text-xs text-muted-foreground">{formatDateTime(primaryNextAction.due_at)}</span>
+                            </div>
+                            <p className="mt-2 text-foreground">{getPayloadNote(primaryNextAction.payload) || "Sin nota adicional."}</p>
+                          </div>
+                        ) : null}
+                        <div className="flex flex-wrap justify-end gap-2">
+                          <Button type="button" variant="outline" onClick={clearNextAction} disabled={savingNextAction || (!primaryNextAction && !selectedLead.next_action_at)}>
+                            Limpiar
+                          </Button>
+                          <Button type="button" onClick={saveNextAction} disabled={savingNextAction || !nextActionDueDraft}>
+                            {savingNextAction ? "Guardando..." : "Guardar acción"}
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-border/80 shadow-none">
+                      <CardHeader className="border-b border-border/80">
+                        <CardTitle className="text-base">Timeline comercial</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-3 p-6">
+                        {timeline.length ? (
+                          timeline.map((item) => (
+                            <div key={item.id} className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-center gap-3">
+                                  <div className="rounded-full border border-border bg-muted/30 p-2 text-muted-foreground">
+                                    {item.type === "note" ? (
+                                      <NotebookPen className="h-4 w-4" />
+                                    ) : item.type === "appointment" ? (
+                                      <CalendarDays className="h-4 w-4" />
+                                    ) : item.type === "call" ? (
+                                      <Phone className="h-4 w-4" />
+                                    ) : (
+                                      <MessageSquareText className="h-4 w-4" />
+                                    )}
+                                  </div>
+                                  <div>
+                                    <p className="text-sm font-semibold text-foreground">{item.title}</p>
+                                    <p className="text-xs text-muted-foreground">{item.meta}</p>
+                                  </div>
+                                </div>
+                                <Badge variant={item.type === "note" ? "soft" : item.type === "appointment" ? "warning" : item.type === "next_action" ? "success" : "default"}>
+                                  {item.type === "note" ? "Nota" : item.type === "appointment" ? "Cita" : item.type === "next_action" ? "Tarea" : "Llamada"}
+                                </Badge>
+                              </div>
+                              <p className="mt-3 text-sm text-foreground">{item.body}</p>
+                            </div>
+                          ))
+                        ) : (
+                          <p className="text-sm text-muted-foreground">Todavía no hay actividad registrada para este lead.</p>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <div className="space-y-4">
+                    <Card className="border-border/80 shadow-none">
+                      <CardHeader className="border-b border-border/80">
+                        <CardTitle className="text-base">Resumen rápido</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-1 p-6 text-sm">
+                        <InfoRow label="Llamadas" value={String(calls.length)} />
+                        <InfoRow label="Citas" value={String(appointments.length)} />
+                        <InfoRow label="Notas" value={notesAvailable ? String(notes.length) : "No disponible"} />
+                        <InfoRow label="Conversación WA" value={`${waMessages.length} mensajes`} />
+                        <InfoRow label="WhatsApp" value={selectedLead.whatsapp_blocked ? "Bloqueado" : "Activo"} />
+                        <InfoRow label="Responsable" value={ownerLabel(selectedLead.owner_user_id, teamMembers)} />
+                      </CardContent>
+                    </Card>
+
+                    <Card className="border-border/80 shadow-none">
+                      <CardHeader className="border-b border-border/80">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          <NotebookPen className="h-4 w-4" />
+                          Notas internas
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4 p-6">
+                        <Textarea
+                          value={noteDraft}
+                          onChange={(event) => setNoteDraft(event.target.value)}
+                          placeholder="Añade contexto útil: objeciones, preferencias horarias, información clínica o próxima acción..."
+                          rows={5}
+                          disabled={!notesAvailable}
+                        />
+                        <div className="flex justify-end">
+                          <Button type="button" onClick={addNote} disabled={savingNote || !noteDraft.trim() || !notesAvailable}>
+                            {savingNote ? "Guardando..." : "Guardar nota"}
+                          </Button>
+                        </div>
+                        <div className="space-y-3">
+                          {notes.length ? (
+                            notes.map((note) => (
+                              <div key={note.id} className="rounded-2xl border border-border bg-muted/20 p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-sm font-medium text-foreground">{note.created_by_name || "Equipo clínica"}</p>
+                                  <p className="text-xs text-muted-foreground">{formatDateTime(note.created_at)}</p>
+                                </div>
+                                <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">{note.body}</p>
+                              </div>
+                            ))
+                          ) : (
+                            <p className="text-sm text-muted-foreground">
+                              {notesAvailable
+                                ? "Aún no hay notas manuales para este lead."
+                                : "Las notas estarán disponibles cuando se cree la tabla lead_notes en Supabase."}
+                            </p>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card className="overflow-hidden border-border/80 shadow-none">
+                      <CardHeader className="border-b border-border/80">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <CardTitle className="flex items-center gap-2 text-base">
+                              <MessageSquareText className="h-4 w-4" />
+                              Conversación de WhatsApp
+                            </CardTitle>
+                            <p className="text-sm text-muted-foreground">
+                              {waThreads.length
+                                ? `${waThreads.length} hilo${waThreads.length === 1 ? "" : "s"} · ${waMessages.length} mensajes`
+                                : "Todavía no hay conversación de WhatsApp enlazada a este lead."}
+                            </p>
+                          </div>
+                          <Button type="button" variant="outline" asChild>
+                            <Link href="/messages">
+                              <LinkIcon className="mr-2 h-4 w-4" />
+                              Ver bandeja completa
+                            </Link>
+                          </Button>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="max-h-[640px] overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(245,239,227,0.85),rgba(255,255,255,0.95))] p-4">
+                        {chatItems.length ? (
+                          <div className="space-y-4">
+                            {chatItems.map((item) => {
+                              if (item.kind === "separator") {
+                                return (
+                                  <div key={item.key} className="flex justify-center">
+                                    <span className="rounded-full border border-border bg-white px-3 py-1 text-xs text-muted-foreground shadow-sm">
+                                      {item.label}
+                                    </span>
+                                  </div>
+                                );
+                              }
+
+                              const message = item.message;
+                              const isAssistant = message.role === "assistant" || (message.direction === "outbound" && message.role !== "human");
+                              const isSystem = message.role === "system";
+
+                              return (
+                                <div key={message.id} className={cn("flex", isAssistant ? "justify-end" : "justify-start")}>
+                                  <div
+                                    className={cn(
+                                      "max-w-[88%] rounded-[22px] border px-4 py-3 shadow-sm",
+                                      isSystem
+                                        ? "border-border bg-white text-foreground"
+                                        : isAssistant
+                                          ? "border-emerald-200 bg-emerald-100/80 text-foreground"
+                                          : "border-border bg-white text-foreground"
+                                    )}
+                                  >
+                                    <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
+                                      <span>{getParticipantLabel(message)}</span>
+                                      <span>·</span>
+                                      <span>{formatClinicTime(message.created_at)}</span>
+                                    </div>
+                                    <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="rounded-2xl border border-dashed border-border bg-white p-6 text-sm text-muted-foreground">
+                            Cuando este lead tenga mensajes guardados en <code>wa_messages</code>, los veremos aquí completos.
+                          </div>
+                        )}
+                      </CardContent>
+                    </Card>
+                  </div>
+                </div>
               </CardContent>
             </Card>
-
-            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <NotebookPen className="h-4 w-4" />
-                    Notas manuales
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <Textarea
-                    value={noteDraft}
-                    onChange={(event) => setNoteDraft(event.target.value)}
-                    placeholder="Añade contexto útil: objeciones, preferencias horarias, información clínica o próxima acción..."
-                    rows={5}
-                  />
-                  <div className="flex justify-end">
-                    <Button type="button" onClick={addNote} disabled={savingNote || !noteDraft.trim()}>
-                      {savingNote ? "Guardando..." : "Guardar nota"}
-                    </Button>
-                  </div>
-                  <div className="space-y-3">
-                    {notes.length ? (
-                      notes.map((note) => (
-                        <div key={note.id} className="rounded-xl border border-border bg-muted/20 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <p className="text-sm font-medium text-foreground">{note.created_by_name || "Equipo clínica"}</p>
-                            <p className="text-xs text-muted-foreground">{formatDateTime(note.created_at)}</p>
-                          </div>
-                          <p className="mt-2 whitespace-pre-wrap text-sm text-foreground">{note.body}</p>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-muted-foreground">Aún no hay notas manuales para este lead.</p>
-                    )}
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="overflow-hidden">
-                <CardHeader className="border-b border-border">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <CardTitle className="flex items-center gap-2 text-base">
-                        <MessageSquareText className="h-4 w-4" />
-                        Conversación de WhatsApp
-                      </CardTitle>
-                      <p className="text-sm text-muted-foreground">
-                        {waThreads.length
-                          ? `${waThreads.length} hilo${waThreads.length === 1 ? "" : "s"} · ${waMessages.length} mensajes`
-                          : "Todavía no hay conversación de WhatsApp enlazada a este lead."}
-                      </p>
-                    </div>
-                    <Button type="button" variant="outline" asChild>
-                      <Link href="/messages">
-                        <LinkIcon className="mr-2 h-4 w-4" />
-                        Ver bandeja completa
-                      </Link>
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent className="max-h-[540px] overflow-y-auto bg-[radial-gradient(circle_at_top,rgba(245,239,227,0.85),rgba(255,255,255,0.95))] p-4">
-                  {chatItems.length ? (
-                    <div className="space-y-4">
-                      {chatItems.map((item) => {
-                        if (item.kind === "separator") {
-                          return (
-                            <div key={item.key} className="flex justify-center">
-                              <span className="rounded-full border border-border bg-white px-3 py-1 text-xs text-muted-foreground shadow-sm">
-                                {item.label}
-                              </span>
-                            </div>
-                          );
-                        }
-
-                        const message = item.message;
-                        const isAssistant = message.role === "assistant" || (message.direction === "outbound" && message.role !== "human");
-                        const isSystem = message.role === "system";
-
-                        return (
-                          <div key={message.id} className={cn("flex", isAssistant ? "justify-end" : "justify-start")}>
-                            <div
-                              className={cn(
-                                "max-w-[85%] rounded-[24px] border px-4 py-3 shadow-sm",
-                                isSystem
-                                  ? "border-border bg-white text-foreground"
-                                  : isAssistant
-                                    ? "border-emerald-200 bg-emerald-100/80 text-foreground"
-                                    : "border-border bg-white text-foreground"
-                              )}
-                            >
-                              <div className="mb-2 flex items-center gap-2 text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
-                                <span>{getParticipantLabel(message)}</span>
-                                <span>·</span>
-                                <span>{formatClinicTime(message.created_at)}</span>
-                              </div>
-                              <p className="whitespace-pre-wrap text-sm leading-relaxed">{message.text}</p>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="rounded-xl border border-dashed border-border bg-white p-6 text-sm text-muted-foreground">
-                      Cuando este lead tenga mensajes guardados en <code>wa_messages</code>, los veremos aquí completos.
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Próxima acción</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-foreground">Tipo de acción</p>
-                    <Select value={nextActionTypeDraft} onValueChange={(value) => setNextActionTypeDraft(value as NextActionType)}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="notify_team">Seguimiento del equipo</SelectItem>
-                        <SelectItem value="retry_call">Reintentar llamada</SelectItem>
-                        <SelectItem value="start_whatsapp_ai">Activar WhatsApp IA</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-foreground">Fecha y hora</p>
-                    <Input type="datetime-local" value={nextActionDueDraft} onChange={(event) => setNextActionDueDraft(event.target.value)} />
-                  </div>
-                  <div className="space-y-2">
-                    <p className="text-sm font-medium text-foreground">Nota de la tarea</p>
-                    <Textarea
-                      rows={4}
-                      value={nextActionNoteDraft}
-                      onChange={(event) => setNextActionNoteDraft(event.target.value)}
-                      placeholder="Ej: llamar mañana a las 11:00, revisar objeción de precio, esperar confirmación del equipo..."
-                    />
-                  </div>
-                  {primaryNextAction ? (
-                    <div className="rounded-xl border border-border bg-muted/20 p-4 text-sm">
-                      <div className="flex items-center justify-between gap-3">
-                        <Badge variant={nextActionVariant(primaryNextAction.action_type)}>{nextActionLabel(primaryNextAction.action_type)}</Badge>
-                        <span className="text-xs text-muted-foreground">{formatDateTime(primaryNextAction.due_at)}</span>
-                      </div>
-                      <p className="mt-2 text-foreground">{getPayloadNote(primaryNextAction.payload) || "Sin nota adicional."}</p>
-                    </div>
-                  ) : null}
-                  <div className="flex flex-wrap justify-end gap-2">
-                    <Button type="button" variant="outline" onClick={clearNextAction} disabled={savingNextAction || (!primaryNextAction && !selectedLead.next_action_at)}>
-                      Limpiar
-                    </Button>
-                    <Button type="button" onClick={saveNextAction} disabled={savingNextAction || !nextActionDueDraft}>
-                      {savingNextAction ? "Guardando..." : "Guardar acción"}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Timeline comercial</CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {timeline.length ? (
-                    timeline.map((item) => (
-                      <div key={item.id} className="rounded-xl border border-border bg-white p-4">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-2">
-                            <div className="rounded-full border border-border bg-muted/30 p-2 text-muted-foreground">
-                              {item.type === "note" ? (
-                                <NotebookPen className="h-4 w-4" />
-                              ) : item.type === "appointment" ? (
-                                <CalendarDays className="h-4 w-4" />
-                              ) : item.type === "call" ? (
-                                <Phone className="h-4 w-4" />
-                              ) : (
-                                <MessageSquareText className="h-4 w-4" />
-                              )}
-                            </div>
-                            <div>
-                              <p className="text-sm font-semibold text-foreground">{item.title}</p>
-                              <p className="text-xs text-muted-foreground">{item.meta}</p>
-                            </div>
-                          </div>
-                          <Badge variant={item.type === "note" ? "soft" : item.type === "appointment" ? "warning" : item.type === "next_action" ? "success" : "default"}>
-                            {item.type === "note" ? "Nota" : item.type === "appointment" ? "Cita" : item.type === "next_action" ? "Tarea" : "Llamada"}
-                          </Badge>
-                        </div>
-                        <p className="mt-3 text-sm text-foreground">{item.body}</p>
-                      </div>
-                    ))
-                  ) : (
-                    <p className="text-sm text-muted-foreground">Todavía no hay actividad registrada para este lead.</p>
-                  )}
-                </CardContent>
-              </Card>
-            </div>
           </>
         ) : (
           <Card className="border-dashed">
