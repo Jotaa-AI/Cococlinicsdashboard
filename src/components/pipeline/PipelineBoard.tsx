@@ -843,6 +843,9 @@ export function PipelineBoard() {
         <p className="text-xs text-muted-foreground">
           Ocho estados operativos para clínica: primer contacto, conversación, cita, no-show y cierre.
         </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Arrastra un lead entre columnas para moverlo manualmente y actualizar su estado en la base de datos.
+        </p>
       </div>
 
       <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
