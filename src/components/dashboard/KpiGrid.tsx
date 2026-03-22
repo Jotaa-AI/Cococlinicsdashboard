@@ -44,6 +44,8 @@ export function KpiGrid() {
     callsMonth: 0,
     callCostMonth: 0,
     appointmentsMonth: 0,
+    appointmentsNoShowMonth: 0,
+    appointmentsCanceledMonth: 0,
     callAiAppointmentsMonth: 0,
     whatsappAiAppointmentsMonth: 0,
     callAiAppointmentsSharePct: 0,
@@ -162,7 +164,11 @@ export function KpiGrid() {
       label: "Total de citas agendadas",
       value: String(kpis.appointmentsMonth),
       note: monthLabel,
-      detail: "Citas programadas en el periodo",
+      detail: "Incluye programadas, realizadas, canceladas y no-show",
+      substats: [
+        { label: "No-show", value: kpis.appointmentsNoShowMonth, className: "text-rose-600" },
+        { label: "Canceladas", value: kpis.appointmentsCanceledMonth, className: "text-amber-600" },
+      ],
       accent: null,
     },
     {
@@ -240,6 +246,15 @@ export function KpiGrid() {
               <p className={`font-display text-2xl font-semibold sm:text-3xl ${card.accent || ""}`}>{card.value}</p>
               <p className="text-xs text-muted-foreground">{card.note}</p>
               {card.detail ? <p className="text-xs font-medium text-foreground/80">{card.detail}</p> : null}
+              {"substats" in card && card.substats?.length ? (
+                <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1">
+                  {card.substats.map((item) => (
+                    <p key={item.label} className={`text-xs font-semibold ${item.className}`}>
+                      {item.label}: {item.value}
+                    </p>
+                  ))}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
         ))}

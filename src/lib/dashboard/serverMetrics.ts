@@ -28,6 +28,8 @@ export interface DashboardSummary {
   callsMonth: number;
   callCostMonth: number;
   appointmentsMonth: number;
+  appointmentsNoShowMonth: number;
+  appointmentsCanceledMonth: number;
   callAiAppointmentsMonth: number;
   whatsappAiAppointmentsMonth: number;
   callAiAppointmentsSharePct: number;
@@ -65,6 +67,10 @@ function getHourKey(date: Date) {
 
 function isScheduledAppointment(appointment: Appointment) {
   return appointment.status === "scheduled" && appointment.entry_type !== "internal_block";
+}
+
+function isCountableAppointment(appointment: Appointment) {
+  return appointment.entry_type !== "internal_block";
 }
 
 function startForView(viewMode: DashboardChartView, referenceDate: Date) {
@@ -151,10 +157,14 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
 
   const callCostMonth = callsMonth.reduce((sum, call) => sum + (parseNumeric(call.call_cost_eur) || 0), 0);
 
-  const scheduledAppointmentsMonth = appointments.filter((appointment) => {
-    if (!isScheduledAppointment(appointment)) return false;
+  const appointmentsMonthRows = appointments.filter((appointment) => {
+    if (!isCountableAppointment(appointment)) return false;
     return inRange(getReferenceTimestamp(appointment.start_at, appointment.created_at), monthStartMs, monthEndMs);
   });
+
+  const scheduledAppointmentsMonth = appointmentsMonthRows.filter((appointment) => appointment.status === "scheduled");
+  const appointmentsNoShowMonth = appointmentsMonthRows.filter((appointment) => appointment.status === "no_show").length;
+  const appointmentsCanceledMonth = appointmentsMonthRows.filter((appointment) => appointment.status === "canceled").length;
 
   const callAiAppointmentsMonth = scheduledAppointmentsMonth.filter(
     (appointment) => appointment.source_channel === "call_ai"
@@ -213,7 +223,9 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
     managedByUnknownMonth,
     callsMonth: callsMonth.length,
     callCostMonth: Number(callCostMonth.toFixed(2)),
-    appointmentsMonth: scheduledAppointmentsMonth.length,
+    appointmentsMonth: appointmentsMonthRows.length,
+    appointmentsNoShowMonth,
+    appointmentsCanceledMonth,
     callAiAppointmentsMonth,
     whatsappAiAppointmentsMonth,
     callAiAppointmentsSharePct,
