@@ -25,13 +25,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { createSupabaseBrowserClient } from "@/lib/supabase/client";
 import { useProfile } from "@/lib/supabase/useProfile";
-import type { Appointment, Call, Json, Lead, LeadNextAction, LeadNote, Profile, WaMessage, WaThread } from "@/lib/types";
+import type { Appointment, Call, Json, Lead, LeadNextAction, LeadNote, WaMessage, WaThread } from "@/lib/types";
 import { CLINIC_TIMEZONE, formatClinicDate, formatClinicDateTime, formatClinicTime } from "@/lib/datetime/clinicTime";
 import { normalizeEsPhone } from "@/lib/leads/resolveLead";
 import { cn } from "@/lib/utils/cn";
 
 type ManagedByFilter = "all" | "humano" | "IA" | "unassigned";
-type ManagedByValue = "humano" | "IA" | "unassigned";
 type NextActionType = LeadNextAction["action_type"];
 
 interface StageOption {
@@ -248,6 +247,25 @@ function inferManagedByFromConversation(lead: Lead, threads: WaThread[]) {
   return lead.managed_by;
 }
 
+function getRelatedThreadsForLead(lead: Pick<Lead, "id" | "phone">, threads: WaThread[]) {
+  const normalizedLeadPhone = normalizeEsPhone(lead.phone) || lead.phone || null;
+  return threads.filter((thread) => {
+    if (thread.lead_id && thread.lead_id === lead.id) return true;
+    if (!normalizedLeadPhone) return false;
+    return thread.phone_e164 === normalizedLeadPhone;
+  });
+}
+
+function getLastWhatsappActivityForLead(lead: Pick<Lead, "id" | "phone">, threads: WaThread[]) {
+  const relatedThreads = getRelatedThreadsForLead(lead, threads);
+  const timestamps = relatedThreads
+    .map((thread) => thread.updated_at || thread.created_at)
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+
+  return timestamps[0] || null;
+}
+
 async function updateLeadWithCompat(supabase: ReturnType<typeof createSupabaseBrowserClient>, leadId: string, payload: Record<string, unknown>) {
   const sanitizedPayload = { ...payload };
 
@@ -275,12 +293,6 @@ async function updateLeadWithCompat(supabase: ReturnType<typeof createSupabaseBr
     data: null,
     error: { message: "No se pudieron guardar los cambios del lead por incompatibilidad de esquema." },
   };
-}
-
-function ownerLabel(ownerUserId: string | null | undefined, members: Profile[]) {
-  if (!ownerUserId) return "Sin responsable";
-  const member = members.find((item) => item.user_id === ownerUserId);
-  return member?.full_name || ownerUserId;
 }
 
 function nextActionLabel(actionType?: NextActionType | null) {
@@ -467,7 +479,6 @@ export function CrmWorkspace() {
   const clinicId = profile?.clinic_id;
 
   const [leads, setLeads] = useState<Lead[]>([]);
-  const [teamMembers, setTeamMembers] = useState<Profile[]>([]);
   const [stageOptions, setStageOptions] = useState<StageOption[]>([]);
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -478,8 +489,6 @@ export function CrmWorkspace() {
   const [waMessages, setWaMessages] = useState<WaMessage[]>([]);
   const [search, setSearch] = useState("");
   const [managedByFilter, setManagedByFilter] = useState<ManagedByFilter>("all");
-  const [managedByDraft, setManagedByDraft] = useState<ManagedByValue>("unassigned");
-  const [ownerUserIdDraft, setOwnerUserIdDraft] = useState<string>("unassigned");
   const [stageDraft, setStageDraft] = useState<string>("");
   const [noteDraft, setNoteDraft] = useState("");
   const [nextActionTypeDraft, setNextActionTypeDraft] = useState<NextActionType>("notify_team");
@@ -511,6 +520,16 @@ export function CrmWorkspace() {
   const stageLabelMap = useMemo(
     () => new Map(stageOptions.map((stage) => [stage.stage_key, stage.label_es])),
     [stageOptions]
+  );
+
+  const selectedManagedByLabel = useMemo(
+    () => (selectedLead ? managedByLabel(selectedLead.managed_by) : "Sin asignar"),
+    [selectedLead]
+  );
+
+  const selectedLastWhatsappMessageAt = useMemo(
+    () => waMessages[waMessages.length - 1]?.created_at || null,
+    [waMessages]
   );
 
   const loadLeads = useCallback(async () => {
@@ -569,7 +588,7 @@ export function CrmWorkspace() {
       };
     };
 
-    const [leadsResult, stagesResult, membersResult, threadsResult] = await Promise.all([
+    const [leadsResult, stagesResult, threadsResult] = await Promise.all([
       fetchAllLeads(),
       supabase
         .from("lead_stage_catalog")
@@ -578,20 +597,15 @@ export function CrmWorkspace() {
         .order("pipeline_order", { ascending: true })
         .order("order_index", { ascending: true }),
       supabase
-        .from("profiles")
-        .select("user_id, clinic_id, role, full_name")
-        .eq("clinic_id", clinicId),
-      supabase
         .from("wa_threads")
         .select("id, clinic_id, lead_id, phone_e164, state, last_outbound_message_id, hitl_active, updated_at, created_at")
         .eq("clinic_id", clinicId),
     ]);
 
-    if (leadsResult.error || stagesResult.error || membersResult.error) {
+    if (leadsResult.error || stagesResult.error) {
       setError(
         leadsResult.error?.message ||
           stagesResult.error?.message ||
-          membersResult.error?.message ||
           "No se pudieron cargar los datos del apartado de Clientes."
       );
       setLoadingLeads(false);
@@ -602,11 +616,11 @@ export function CrmWorkspace() {
     const nextLeads = ((leadsResult.data || []) as Lead[]).map((lead) => ({
       ...lead,
       managed_by: inferManagedByFromConversation(lead, threadList),
+      last_contact_at: getLastWhatsappActivityForLead(lead, threadList) || lead.last_contact_at,
     }));
 
     setLeads(nextLeads);
     setStageOptions((stagesResult.data || []) as StageOption[]);
-    setTeamMembers((membersResult.data || []) as Profile[]);
     setSelectedLeadId((current) => current || nextLeads[0]?.id || null);
     setLoadingLeads(false);
   }, [clinicId, supabase]);
@@ -755,8 +769,6 @@ export function CrmWorkspace() {
 
   useEffect(() => {
     if (!selectedLead) return;
-    setManagedByDraft(selectedLead.managed_by || "unassigned");
-    setOwnerUserIdDraft(selectedLead.owner_user_id || "unassigned");
     setStageDraft(selectedLead.stage_key || "");
     loadLeadDetails(selectedLead);
   }, [loadLeadDetails, selectedLead]);
@@ -792,7 +804,6 @@ export function CrmWorkspace() {
         lead.treatment,
         stageLabelMap.get(lead.stage_key || ""),
         lead.source,
-        ownerLabel(lead.owner_user_id, teamMembers),
       ]
         .filter(Boolean)
         .join(" ")
@@ -800,7 +811,7 @@ export function CrmWorkspace() {
 
       return haystack.includes(query);
     });
-  }, [leads, managedByFilter, search, stageLabelMap, teamMembers]);
+  }, [leads, managedByFilter, search, stageLabelMap]);
 
   useEffect(() => {
     if (!filteredLeads.length) {
@@ -820,8 +831,6 @@ export function CrmWorkspace() {
     setSuccess(null);
 
     const payload = {
-      managed_by: managedByDraft === "unassigned" ? null : managedByDraft,
-      owner_user_id: ownerUserIdDraft === "unassigned" ? null : ownerUserIdDraft,
       stage_key: stageDraft || selectedLead.stage_key,
       updated_at: new Date().toISOString(),
     };
@@ -1245,7 +1254,6 @@ export function CrmWorkspace() {
 
                       <div className="flex flex-wrap gap-2">
                         <Badge variant={managedByBadgeVariant(lead.managed_by)}>{managedByLabel(lead.managed_by)}</Badge>
-                        <Badge variant="soft">{ownerLabel(lead.owner_user_id, teamMembers)}</Badge>
                         {lead.has_scheduled_appointment ? <Badge variant="warning">Cita activa</Badge> : null}
                       </div>
                     </div>
@@ -1323,10 +1331,13 @@ export function CrmWorkspace() {
 
                 <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-5">
                   <MetricTile label="Creado" value={formatDateTime(selectedLead.created_at)} />
-                  <MetricTile label="Último contacto" value={formatDateTime(selectedLead.last_contact_at)} />
+                  <MetricTile
+                    label="Último contacto"
+                    value={formatDateTime(selectedLastWhatsappMessageAt || selectedLead.last_contact_at)}
+                  />
                   <MetricTile label="Próxima acción" value={formatDateTime(selectedLead.next_action_at)} />
                   <MetricTile label="Cita agendada" value={selectedLead.has_scheduled_appointment ? "Sí" : "No"} />
-                  <MetricTile label="Responsable" value={ownerLabel(selectedLead.owner_user_id, teamMembers)} />
+                  <MetricTile label="Gestión actual" value={selectedManagedByLabel} />
                 </div>
 
                 <div className="grid gap-4 2xl:grid-cols-[minmax(0,1.35fr)_360px]">
@@ -1361,38 +1372,21 @@ export function CrmWorkspace() {
                           <div>
                             <p className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">Gestión comercial</p>
                             <p className="mt-2 text-sm text-muted-foreground">
-                              Organiza responsable, etapa y quién lleva el lead sin salir de esta ficha.
+                              Aquí vemos quién está llevando la conversación y en qué etapa comercial está el lead.
                             </p>
                           </div>
-                          <div className="grid gap-4 md:grid-cols-3">
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium text-foreground">Quién lo gestiona</p>
-                              <Select value={managedByDraft} onValueChange={(value) => setManagedByDraft(value as ManagedByValue)}>
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="humano">Clínica</SelectItem>
-                                  <SelectItem value="IA">IA</SelectItem>
-                                  <SelectItem value="unassigned">Sin asignar</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-2">
-                              <p className="text-sm font-medium text-foreground">Responsable del lead</p>
-                              <Select value={ownerUserIdDraft} onValueChange={setOwnerUserIdDraft}>
-                                <SelectTrigger>
-                                  <SelectValue placeholder="Selecciona responsable" />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="unassigned">Sin responsable</SelectItem>
-                                  {teamMembers.map((member) => (
-                                    <SelectItem key={member.user_id} value={member.user_id}>
-                                      {member.full_name || member.user_id}
-                                    </SelectItem>
-                                  ))}
-                                </SelectContent>
-                              </Select>
+                          <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                            <div className="rounded-2xl border border-border bg-muted/20 px-4 py-3">
+                              <p className="text-sm font-medium text-foreground">Gestión actual</p>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Badge variant={managedByBadgeVariant(selectedLead.managed_by)}>
+                                  {selectedManagedByLabel}
+                                </Badge>
+                                {selectedLead.whatsapp_blocked ? <Badge variant="warning">Humano - humano</Badge> : null}
+                              </div>
+                              <p className="mt-3 text-xs text-muted-foreground">
+                                Este valor se deduce automáticamente según el estado real de la conversación de WhatsApp.
+                              </p>
                             </div>
                             <div className="space-y-2">
                               <p className="text-sm font-medium text-foreground">Etapa actual</p>
@@ -1518,7 +1512,11 @@ export function CrmWorkspace() {
                         <InfoRow label="Notas" value={notesAvailable ? String(notes.length) : "No disponible"} />
                         <InfoRow label="Conversación WA" value={`${waMessages.length} mensajes`} />
                         <InfoRow label="WhatsApp" value={selectedLead.whatsapp_blocked ? "Bloqueado" : "Activo"} />
-                        <InfoRow label="Responsable" value={ownerLabel(selectedLead.owner_user_id, teamMembers)} />
+                        <InfoRow
+                          label="Último mensaje WA"
+                          value={formatDateTime(selectedLastWhatsappMessageAt || selectedLead.last_contact_at)}
+                        />
+                        <InfoRow label="Gestión actual" value={selectedManagedByLabel} />
                       </CardContent>
                     </Card>
 

@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { CelebrationOverlay } from "@/components/ui/celebration-overlay";
 import { formatClinicDateTime } from "@/lib/datetime/clinicTime";
+import { normalizeEsPhone } from "@/lib/leads/resolveLead";
 
 const LEGACY_STAGE_FROM_STATUS: Record<string, string> = {
   new: "new_lead",
@@ -317,6 +318,24 @@ const PIPELINE_COLUMN_FROM_STAGE: Record<string, PipelineColumn["id"]> = {
 
 type ManagedByFilter = "all" | "humano" | "IA" | "unassigned";
 
+type LeadSignalSets = {
+  noShowLeadIds: Set<string>;
+  noShowPhones: Set<string>;
+  repliedLeadIds: Set<string>;
+  repliedPhones: Set<string>;
+};
+
+const REPLY_LOCKED_STAGE_KEYS = new Set([
+  "visit_scheduled",
+  "visit_no_show",
+  "post_visit_pending_decision",
+  "post_visit_follow_up",
+  "post_visit_not_closed",
+  "client_closed",
+  "not_interested",
+  "discarded",
+]);
+
 function managedByLabel(value?: Lead["managed_by"] | null) {
   if (value === "humano") return "Clínica";
   if (value === "IA") return "IA";
@@ -338,6 +357,39 @@ function toLocalDate(value: string) {
     minute: "2-digit",
     hour12: false,
   });
+}
+
+function getLeadPhoneKey(phone?: string | null) {
+  return normalizeEsPhone(phone) || phone || null;
+}
+
+function getRelatedThreadsForLead(
+  lead: Pick<Lead, "id" | "phone">,
+  threads: Array<{ lead_id: string | null; phone_e164: string; hitl_active: boolean }>
+) {
+  const leadPhone = getLeadPhoneKey(lead.phone);
+  return threads.filter((thread) => {
+    if (thread.lead_id && thread.lead_id === lead.id) return true;
+    if (!leadPhone) return false;
+    return thread.phone_e164 === leadPhone;
+  });
+}
+
+function inferManagedByFromConversation(
+  lead: Pick<Lead, "id" | "phone" | "managed_by" | "whatsapp_blocked">,
+  threads: Array<Pick<Lead, never> & { lead_id: string | null; phone_e164: string; hitl_active: boolean }>
+) {
+  const relatedThreads = getRelatedThreadsForLead(lead, threads);
+
+  if (lead.whatsapp_blocked || relatedThreads.some((thread) => thread.hitl_active)) {
+    return "humano" as const;
+  }
+
+  if (relatedThreads.length > 0) {
+    return "IA" as const;
+  }
+
+  return lead.managed_by;
 }
 
 interface LeadCardProps {
@@ -494,6 +546,12 @@ export function PipelineBoard() {
   const [leadConversionError, setLeadConversionError] = useState<string | null>(null);
   const [showCelebration, setShowCelebration] = useState(false);
   const [managedByFilter, setManagedByFilter] = useState<ManagedByFilter>("all");
+  const [leadSignals, setLeadSignals] = useState<LeadSignalSets>({
+    noShowLeadIds: new Set(),
+    noShowPhones: new Set(),
+    repliedLeadIds: new Set(),
+    repliedPhones: new Set(),
+  });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
 
@@ -512,7 +570,17 @@ export function PipelineBoard() {
   );
 
   const resolveStageKey = useCallback(
-    (lead: Pick<Lead, "stage_key" | "status" | "intents">) => {
+    (lead: Pick<Lead, "id" | "phone" | "stage_key" | "status" | "intents">) => {
+      const leadPhone = getLeadPhoneKey(lead.phone);
+      const hasNoShowSignal =
+        lead.status === "no_show" ||
+        leadSignals.noShowLeadIds.has(lead.id) ||
+        (leadPhone ? leadSignals.noShowPhones.has(leadPhone) : false);
+
+      if (hasNoShowSignal && stageMap.has("visit_no_show")) {
+        return "visit_no_show";
+      }
+
       if (lead.status === "no_response") {
         if (lead.intents === "1" && stageMap.has("second_call_scheduled")) return "second_call_scheduled";
         if (lead.intents === "2" && stageMap.has("no_answer_second_call")) return "no_answer_second_call";
@@ -526,15 +594,24 @@ export function PipelineBoard() {
 
       return "new_lead";
     },
-    [stageMap]
+    [leadSignals, stageMap]
   );
 
   const resolvePipelineColumnKey = useCallback(
-    (lead: Pick<Lead, "stage_key" | "status" | "intents">) => {
+    (lead: Pick<Lead, "id" | "phone" | "stage_key" | "status" | "intents">) => {
       const stageKey = resolveStageKey(lead);
+      const leadPhone = getLeadPhoneKey(lead.phone);
+      const hasReplySignal =
+        leadSignals.repliedLeadIds.has(lead.id) ||
+        (leadPhone ? leadSignals.repliedPhones.has(leadPhone) : false);
+
+      if (hasReplySignal && !REPLY_LOCKED_STAGE_KEYS.has(stageKey)) {
+        return "active_conversation";
+      }
+
       return PIPELINE_COLUMN_FROM_STAGE[stageKey] || "first_contact";
     },
-    [resolveStageKey]
+    [leadSignals, resolveStageKey]
   );
 
   const filteredLeads = useMemo(() => {
@@ -575,13 +652,84 @@ export function PipelineBoard() {
 
   const loadLeads = useCallback(async () => {
     if (!clinicId) return;
-    const { data } = await supabase
-      .from("leads")
-      .select("*")
-      .eq("clinic_id", clinicId)
-      .order("created_at", { ascending: false });
+    const [leadsResult, threadsResult, repliedMessagesResult, noShowAppointmentsResult] = await Promise.all([
+      supabase
+        .from("leads")
+        .select("*")
+        .eq("clinic_id", clinicId)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("wa_threads")
+        .select("id, lead_id, phone_e164, hitl_active")
+        .eq("clinic_id", clinicId),
+      supabase
+        .from("wa_messages")
+        .select("lead_id, thread_id")
+        .eq("clinic_id", clinicId)
+        .eq("direction", "inbound")
+        .eq("role", "human"),
+      supabase
+        .from("appointments")
+        .select("lead_id, lead_phone")
+        .eq("clinic_id", clinicId)
+        .eq("status", "no_show"),
+    ]);
 
-    if (data) setLeads(data as Lead[]);
+    if (!leadsResult.data) return;
+
+    const threads = (threadsResult.data || []) as Array<{
+      lead_id: string | null;
+      phone_e164: string;
+      hitl_active: boolean;
+    }>;
+
+    const threadPhoneMap = new Map<string, string | null>();
+    for (const thread of (threadsResult.data || []) as Array<{ id?: string; phone_e164: string }>) {
+      if (thread.id) {
+        threadPhoneMap.set(thread.id, thread.phone_e164);
+      }
+    }
+
+    const repliedLeadIds = new Set<string>();
+    const repliedPhones = new Set<string>();
+    for (const message of (repliedMessagesResult.data || []) as Array<{ lead_id: string | null; thread_id: string }>) {
+      if (message.lead_id) {
+        repliedLeadIds.add(message.lead_id);
+      }
+
+      const threadPhone = threadPhoneMap.get(message.thread_id);
+      const phoneKey = getLeadPhoneKey(threadPhone);
+      if (phoneKey) {
+        repliedPhones.add(phoneKey);
+      }
+    }
+
+    const noShowLeadIds = new Set<string>();
+    const noShowPhones = new Set<string>();
+    for (const appointment of (noShowAppointmentsResult.data || []) as Array<{ lead_id: string | null; lead_phone: string | null }>) {
+      if (appointment.lead_id) {
+        noShowLeadIds.add(appointment.lead_id);
+      }
+
+      const phoneKey = getLeadPhoneKey(appointment.lead_phone);
+      if (phoneKey) {
+        noShowPhones.add(phoneKey);
+      }
+    }
+
+    setLeadSignals({
+      noShowLeadIds,
+      noShowPhones,
+      repliedLeadIds,
+      repliedPhones,
+    });
+
+    const enrichedLeads = (leadsResult.data as Lead[]).map((lead) => ({
+      ...lead,
+      managed_by: inferManagedByFromConversation(lead, threads),
+    }));
+
+    setLeads(enrichedLeads);
   }, [supabase, clinicId]);
 
   const loadLeadHistory = useCallback(
@@ -656,6 +804,21 @@ export function PipelineBoard() {
             loadLeadHistory(activeLead.id);
           }
         }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "appointments", filter: `clinic_id=eq.${clinicId}` },
+        loadLeads
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "wa_threads", filter: `clinic_id=eq.${clinicId}` },
+        loadLeads
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "wa_messages", filter: `clinic_id=eq.${clinicId}` },
+        loadLeads
       )
       .subscribe();
 
