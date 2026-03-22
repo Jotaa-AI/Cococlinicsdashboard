@@ -229,6 +229,23 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
   },
 ];
 
+function mergeStageCatalogWithFallback(stageCatalog: LeadStageCatalog[]) {
+  const merged = new Map<string, LeadStageCatalog>();
+
+  for (const stage of FALLBACK_STAGES) {
+    merged.set(stage.stage_key, stage);
+  }
+
+  for (const stage of stageCatalog) {
+    merged.set(stage.stage_key, stage);
+  }
+
+  return [...merged.values()].sort((a, b) => {
+    if (a.pipeline_order !== b.pipeline_order) return a.pipeline_order - b.pipeline_order;
+    return a.order_index - b.order_index;
+  });
+}
+
 interface PipelineColumn {
   id:
     | "first_contact"
@@ -577,7 +594,7 @@ export function PipelineBoard() {
         leadSignals.noShowLeadIds.has(lead.id) ||
         (leadPhone ? leadSignals.noShowPhones.has(leadPhone) : false);
 
-      if (hasNoShowSignal && stageMap.has("visit_no_show")) {
+      if (hasNoShowSignal) {
         return "visit_no_show";
       }
 
@@ -646,7 +663,7 @@ export function PipelineBoard() {
       .order("order_index", { ascending: true });
 
     if (data && data.length) {
-      setStages(data as LeadStageCatalog[]);
+      setStages(mergeStageCatalogWithFallback(data as LeadStageCatalog[]));
     }
   }, [supabase]);
 
