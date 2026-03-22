@@ -166,36 +166,6 @@ export function KpiGrid() {
       accent: null,
     },
     {
-      label: "Citas por llamada",
-      value: String(kpis.callAiAppointmentsMonth),
-      note: monthLabel,
-      detail:
-        kpis.callAiAppointmentsMonth || kpis.whatsappAiAppointmentsMonth
-          ? `${kpis.callAiAppointmentsSharePct.toLocaleString("es-ES", {
-              minimumFractionDigits: 0,
-              maximumFractionDigits: 1,
-            })}% del total IA (${kpis.callAiAppointmentsMonth} de ${
-              kpis.callAiAppointmentsMonth + kpis.whatsappAiAppointmentsMonth
-            })`
-          : "Sin citas creadas por IA en el periodo",
-      accent: "text-sky-700",
-    },
-    {
-      label: "Citas por WhatsApp",
-      value: String(kpis.whatsappAiAppointmentsMonth),
-      note: monthLabel,
-      detail:
-        kpis.callAiAppointmentsMonth || kpis.whatsappAiAppointmentsMonth
-          ? `${kpis.whatsappAiAppointmentsSharePct.toLocaleString("es-ES", {
-              minimumFractionDigits: 0,
-              maximumFractionDigits: 1,
-            })}% del total IA (${kpis.whatsappAiAppointmentsMonth} de ${
-              kpis.callAiAppointmentsMonth + kpis.whatsappAiAppointmentsMonth
-            })`
-          : "Sin citas creadas por IA en el periodo",
-      accent: "text-violet-700",
-    },
-    {
       label: "Citas ganadas",
       value: currencyFormatter.format(kpis.wonRevenueMonth),
       note: monthLabel,

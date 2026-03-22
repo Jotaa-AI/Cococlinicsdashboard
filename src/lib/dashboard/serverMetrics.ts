@@ -137,8 +137,12 @@ export function computeDashboardSummary(leads: Lead[], calls: Call[], appointmen
   const leadsWeek = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), weekStart, nextWeekStart)).length;
   const leadsMonthRows = leads.filter((lead) => inRange(getReferenceTimestamp(lead.created_at), monthStartMs, monthEndMs));
   const leadsMonth = leadsMonthRows.length;
-  const managedByHumanMonth = leadsMonthRows.filter((lead) => lead.managed_by === "humano").length;
-  const managedByAiMonth = leadsMonthRows.filter((lead) => lead.managed_by === "IA").length;
+  const managedByHumanMonth = leadsMonthRows.filter(
+    (lead) => lead.whatsapp_blocked || lead.managed_by === "humano"
+  ).length;
+  const managedByAiMonth = leadsMonthRows.filter(
+    (lead) => !lead.whatsapp_blocked && lead.managed_by === "IA"
+  ).length;
   const managedByUnknownMonth = Math.max(0, leadsMonth - managedByHumanMonth - managedByAiMonth);
 
   const callsMonth = calls.filter((call) =>
