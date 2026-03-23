@@ -1374,6 +1374,16 @@ create policy "Agent runtime controls admin update" on agent_runtime_controls
   for update using (clinic_id = current_clinic_id() and is_admin())
   with check (clinic_id = current_clinic_id() and is_admin());
 
+create policy "Agent system prompts select" on agent_system_prompts
+  for select using (clinic_id = current_clinic_id());
+
+create policy "Agent system prompts admin insert" on agent_system_prompts
+  for insert with check (clinic_id = current_clinic_id() and is_admin());
+
+create policy "Agent system prompts admin update" on agent_system_prompts
+  for update using (clinic_id = current_clinic_id() and is_admin())
+  with check (clinic_id = current_clinic_id() and is_admin());
+
 create policy "Audit log select" on audit_log
   for select using (clinic_id = current_clinic_id());
 
