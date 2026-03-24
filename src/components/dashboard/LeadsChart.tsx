@@ -147,7 +147,7 @@ export function LeadsChart() {
           <div className="rounded-2xl border bg-primary/5 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Visitas agendadas</p>
             <p className="font-display text-3xl font-semibold text-primary">{appointmentsTotal}</p>
-            <p className="text-xs text-muted-foreground">Citas scheduled del periodo</p>
+            <p className="text-xs text-muted-foreground">Citas creadas en el periodo</p>
           </div>
         </div>
       </div>
@@ -166,7 +166,7 @@ export function LeadsChart() {
               }}
               formatter={(value, name) => {
                 if (name === "leads") return [`${value}`, "Leads"];
-                return [`${value}`, "Visitas agendadas"];
+                return [`${value}`, "Citas agendadas"];
               }}
               contentStyle={{
                 borderRadius: 18,

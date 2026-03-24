@@ -65,10 +65,6 @@ function getHourKey(date: Date) {
   return format(date, "yyyy-MM-dd-HH");
 }
 
-function isScheduledAppointment(appointment: Appointment) {
-  return appointment.status === "scheduled" && appointment.entry_type !== "internal_block";
-}
-
 function isCountableAppointment(appointment: Appointment) {
   return appointment.entry_type !== "internal_block";
 }
@@ -255,8 +251,8 @@ export function computeDashboardChart(leads: Pick<Lead, "created_at">[], appoint
   }
 
   for (const appointment of appointments) {
-    if (!isScheduledAppointment(appointment)) continue;
-    const timestamp = getReferenceTimestamp(appointment.start_at, appointment.created_at);
+    if (!isCountableAppointment(appointment)) continue;
+    const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
     if (!inRange(timestamp, rangeStartMs, rangeEndMs)) continue;
     const date = new Date(timestamp as number);
     const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);

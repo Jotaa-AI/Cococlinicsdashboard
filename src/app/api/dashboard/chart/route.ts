@@ -82,8 +82,8 @@ export async function GET(request: Request) {
       .from("appointments")
       .select("*")
       .eq("clinic_id", profile.clinic_id)
-      .gte("start_at", range.start.toISOString())
-      .lt("start_at", range.end.toISOString()),
+      .gte("created_at", range.start.toISOString())
+      .lt("created_at", range.end.toISOString()),
   ]);
 
   if (leadsResult.error || appointmentsResult.error) {
