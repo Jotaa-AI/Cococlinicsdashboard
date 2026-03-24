@@ -28,6 +28,14 @@ const viewLabels: Record<DashboardChartView, string> = {
   month: "Mes",
 };
 
+type AppointmentSeriesView = "booked" | "starts" | "both";
+
+const appointmentSeriesLabels: Record<AppointmentSeriesView, string> = {
+  booked: "Agendadas",
+  starts: "Empiezan",
+  both: "Ambas",
+};
+
 function shiftReferenceDate(viewMode: DashboardChartView, referenceDate: Date, direction: -1 | 1) {
   if (viewMode === "day") return addDays(referenceDate, direction);
   if (viewMode === "week") return addDays(referenceDate, direction * 7);
@@ -39,17 +47,20 @@ export function LeadsChart() {
   const { profile } = useProfile();
   const clinicId = profile?.clinic_id;
   const [viewMode, setViewMode] = useState<DashboardChartView>("month");
+  const [appointmentSeriesView, setAppointmentSeriesView] = useState<AppointmentSeriesView>("both");
   const [referenceDate, setReferenceDate] = useState(() => new Date());
   const [data, setData] = useState<DashboardChartPoint[]>([]);
   const [leadsTotal, setLeadsTotal] = useState(0);
-  const [appointmentsTotal, setAppointmentsTotal] = useState(0);
+  const [appointmentsBookedTotal, setAppointmentsBookedTotal] = useState(0);
+  const [appointmentsStartsTotal, setAppointmentsStartsTotal] = useState(0);
   const [rangeLabel, setRangeLabel] = useState("");
 
   const loadData = useCallback(async () => {
     if (!clinicId) {
       setData([]);
       setLeadsTotal(0);
-      setAppointmentsTotal(0);
+      setAppointmentsBookedTotal(0);
+      setAppointmentsStartsTotal(0);
       setRangeLabel("");
       return;
     }
@@ -66,7 +77,8 @@ export function LeadsChart() {
 
     setData(payload.data);
     setLeadsTotal(payload.leadsTotal);
-    setAppointmentsTotal(payload.appointmentsTotal);
+    setAppointmentsBookedTotal(payload.appointmentsBookedTotal);
+    setAppointmentsStartsTotal(payload.appointmentsStartsTotal);
     setRangeLabel(payload.rangeLabel);
   }, [clinicId, referenceDate, viewMode]);
 
@@ -115,6 +127,19 @@ export function LeadsChart() {
               </Button>
             ))}
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {(Object.keys(appointmentSeriesLabels) as AppointmentSeriesView[]).map((mode) => (
+              <Button
+                key={mode}
+                type="button"
+                variant={appointmentSeriesView === mode ? "default" : "outline"}
+                size="sm"
+                onClick={() => setAppointmentSeriesView(mode)}
+              >
+                {appointmentSeriesLabels[mode]}
+              </Button>
+            ))}
+          </div>
           <div className="flex items-center gap-2">
             <Button
               type="button"
@@ -146,8 +171,10 @@ export function LeadsChart() {
           </div>
           <div className="rounded-2xl border bg-primary/5 px-4 py-3">
             <p className="text-xs font-medium uppercase tracking-[0.22em] text-muted-foreground">Visitas agendadas</p>
-            <p className="font-display text-3xl font-semibold text-primary">{appointmentsTotal}</p>
-            <p className="text-xs text-muted-foreground">Citas creadas en el periodo</p>
+            <p className="font-display text-3xl font-semibold text-primary">{appointmentsBookedTotal}</p>
+            <p className="text-xs text-muted-foreground">
+              Citas creadas en el periodo · {appointmentsStartsTotal} empiezan en el periodo
+            </p>
           </div>
         </div>
       </div>
@@ -166,7 +193,8 @@ export function LeadsChart() {
               }}
               formatter={(value, name) => {
                 if (name === "leads") return [`${value}`, "Leads"];
-                return [`${value}`, "Citas agendadas"];
+                if (name === "appointmentsBooked") return [`${value}`, "Citas agendadas"];
+                return [`${value}`, "Citas que empiezan"];
               }}
               contentStyle={{
                 borderRadius: 18,
@@ -176,14 +204,26 @@ export function LeadsChart() {
               }}
             />
             <Bar dataKey="leads" fill="hsl(var(--primary) / 0.18)" radius={[10, 10, 0, 0]} maxBarSize={28} />
-            <Line
-              type="monotone"
-              dataKey="appointments"
-              stroke="hsl(var(--primary))"
-              strokeWidth={3}
-              dot={{ r: 3, strokeWidth: 2 }}
-              activeDot={{ r: 5 }}
-            />
+            {(appointmentSeriesView === "booked" || appointmentSeriesView === "both") && (
+              <Line
+                type="monotone"
+                dataKey="appointmentsBooked"
+                stroke="hsl(var(--primary))"
+                strokeWidth={3}
+                dot={{ r: 3, strokeWidth: 2 }}
+                activeDot={{ r: 5 }}
+              />
+            )}
+            {(appointmentSeriesView === "starts" || appointmentSeriesView === "both") && (
+              <Line
+                type="monotone"
+                dataKey="appointmentsStarts"
+                stroke="hsl(158 64% 40%)"
+                strokeWidth={3}
+                dot={{ r: 3, strokeWidth: 2 }}
+                activeDot={{ r: 5 }}
+              />
+            )}
           </ComposedChart>
         </ResponsiveContainer>
       </div>

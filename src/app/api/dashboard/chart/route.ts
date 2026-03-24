@@ -82,8 +82,9 @@ export async function GET(request: Request) {
       .from("appointments")
       .select("*")
       .eq("clinic_id", profile.clinic_id)
-      .gte("created_at", range.start.toISOString())
-      .lt("created_at", range.end.toISOString()),
+      .or(
+        `and(created_at.gte.${range.start.toISOString()},created_at.lt.${range.end.toISOString()}),and(start_at.gte.${range.start.toISOString()},start_at.lt.${range.end.toISOString()})`
+      ),
   ]);
 
   if (leadsResult.error || appointmentsResult.error) {

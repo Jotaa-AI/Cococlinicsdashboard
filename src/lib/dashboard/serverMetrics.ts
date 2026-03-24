@@ -45,13 +45,15 @@ export interface DashboardChartPoint {
   label: string;
   fullLabel: string;
   leads: number;
-  appointments: number;
+  appointmentsBooked: number;
+  appointmentsStarts: number;
 }
 
 export interface DashboardChartResponse {
   data: DashboardChartPoint[];
   leadsTotal: number;
-  appointmentsTotal: number;
+  appointmentsBookedTotal: number;
+  appointmentsStartsTotal: number;
   rangeLabel: string;
 }
 
@@ -108,7 +110,8 @@ function buildBuckets(viewMode: DashboardChartView, referenceDate: Date): Dashbo
       label: format(hour, "HH:mm"),
       fullLabel: format(hour, "dd/MM/yyyy HH:mm"),
       leads: 0,
-      appointments: 0,
+      appointmentsBooked: 0,
+      appointmentsStarts: 0,
     }));
   }
 
@@ -120,7 +123,8 @@ function buildBuckets(viewMode: DashboardChartView, referenceDate: Date): Dashbo
     label: viewMode === "week" ? format(day, "EEE d", { locale: es }) : format(day, "d"),
     fullLabel: format(day, "dd/MM/yyyy"),
     leads: 0,
-    appointments: 0,
+    appointmentsBooked: 0,
+    appointmentsStarts: 0,
   }));
 }
 
@@ -252,18 +256,28 @@ export function computeDashboardChart(leads: Pick<Lead, "created_at">[], appoint
 
   for (const appointment of appointments) {
     if (!isCountableAppointment(appointment)) continue;
-    const timestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
-    if (!inRange(timestamp, rangeStartMs, rangeEndMs)) continue;
-    const date = new Date(timestamp as number);
-    const key = viewMode === "day" ? getHourKey(date) : getDateKey(date);
-    const index = indexByKey.get(key);
-    if (index !== undefined) points[index].appointments += 1;
+    const bookedTimestamp = getReferenceTimestamp(appointment.created_at, appointment.start_at);
+    if (inRange(bookedTimestamp, rangeStartMs, rangeEndMs)) {
+      const bookedDate = new Date(bookedTimestamp as number);
+      const bookedKey = viewMode === "day" ? getHourKey(bookedDate) : getDateKey(bookedDate);
+      const bookedIndex = indexByKey.get(bookedKey);
+      if (bookedIndex !== undefined) points[bookedIndex].appointmentsBooked += 1;
+    }
+
+    const startsTimestamp = getReferenceTimestamp(appointment.start_at, appointment.created_at);
+    if (inRange(startsTimestamp, rangeStartMs, rangeEndMs)) {
+      const startsDate = new Date(startsTimestamp as number);
+      const startsKey = viewMode === "day" ? getHourKey(startsDate) : getDateKey(startsDate);
+      const startsIndex = indexByKey.get(startsKey);
+      if (startsIndex !== undefined) points[startsIndex].appointmentsStarts += 1;
+    }
   }
 
   return {
     data: points,
     leadsTotal: points.reduce((acc, point) => acc + point.leads, 0),
-    appointmentsTotal: points.reduce((acc, point) => acc + point.appointments, 0),
+    appointmentsBookedTotal: points.reduce((acc, point) => acc + point.appointmentsBooked, 0),
+    appointmentsStartsTotal: points.reduce((acc, point) => acc + point.appointmentsStarts, 0),
     rangeLabel: formatRangeLabel(viewMode, referenceDate).replace(/^\w/, (char) => char.toUpperCase()),
   };
 }
