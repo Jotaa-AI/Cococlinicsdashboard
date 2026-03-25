@@ -22,6 +22,14 @@ interface VisitSections {
   review: PostVisitLeadRow[];
 }
 
+const DASHBOARD_EXIT_STAGE_KEYS = new Set([
+  "post_visit_pending_decision",
+  "post_visit_follow_up",
+  "post_visit_not_closed",
+  "visit_no_show",
+  "client_closed",
+]);
+
 function normalizePhone(rawPhone?: string | null) {
   if (!rawPhone) return null;
   let digits = rawPhone.replace(/\D/g, "");
@@ -160,9 +168,7 @@ export function PostVisitLeadsCard() {
       .filter(
         (row) =>
           !row.lead ||
-          (row.lead.stage_key !== "client_closed" &&
-            row.lead.stage_key !== "visit_no_show" &&
-            !row.lead.converted_to_client)
+          (!row.lead.stage_key || !DASHBOARD_EXIT_STAGE_KEYS.has(row.lead.stage_key)) && !row.lead.converted_to_client
       ) as PostVisitLeadRow[];
 
     setRows(nextRows);
