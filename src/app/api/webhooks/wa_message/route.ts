@@ -29,6 +29,14 @@ function getNestedValue(source: unknown, path: string[]) {
   return current;
 }
 
+function pickFirstNormalizedPhone(...values: Array<unknown>) {
+  for (const value of values) {
+    const normalized = normalizeEsPhone(sanitizeIncomingWhatsappString(value));
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
 async function getLeadById(supabase: ReturnType<typeof createSupabaseAdminClient>, clinicId: string, leadId: string) {
   const { data } = await supabase
     .from("leads")
@@ -80,7 +88,30 @@ export async function POST(request: Request) {
       inboundRecord ? "inbound" : null,
       outboundRecord ? "outbound" : null
     ) || "outbound";
-  const direction = directionRaw === "inbound" ? "inbound" : "outbound";
+  const requestedPhone = pickFirstNormalizedPhone(payloadRecord.phone_e164, payloadRecord.phone, payloadRecord.lead_phone);
+  const providerFromPhone = pickFirstNormalizedPhone(
+    payloadRecord.from,
+    getNestedValue(payloadRecord, ["metadata", "from"]),
+    getNestedValue(payloadRecord, ["body", "from"]),
+    getNestedValue(payloadRecord, ["body", "whatsappInboundMessage", "from"]),
+    getNestedValue(providerRecord, ["from"])
+  );
+  const providerToPhone = pickFirstNormalizedPhone(
+    payloadRecord.to,
+    getNestedValue(payloadRecord, ["metadata", "to"]),
+    getNestedValue(payloadRecord, ["body", "to"]),
+    getNestedValue(payloadRecord, ["body", "whatsappOutboundMessage", "to"]),
+    getNestedValue(providerRecord, ["to"])
+  );
+
+  const inferredDirection =
+    requestedPhone && providerFromPhone === requestedPhone && providerToPhone && providerToPhone !== requestedPhone
+      ? "inbound"
+      : requestedPhone && providerToPhone === requestedPhone && providerFromPhone && providerFromPhone !== requestedPhone
+        ? "outbound"
+        : null;
+
+  const direction = (inferredDirection || directionRaw) === "inbound" ? "inbound" : "outbound";
   const roleRaw = pickFirstString(payloadRecord.role);
   const role = roleRaw === "assistant" || roleRaw === "system" || roleRaw === "human"
     ? roleRaw
@@ -120,16 +151,10 @@ export async function POST(request: Request) {
       : { data: null };
 
   const rawPhone = pickFirstString(
-    direction === "inbound" ? payloadRecord.from : payloadRecord.to,
-    direction === "inbound" ? payloadRecord.phone_e164 : payloadRecord.to,
-    direction === "inbound" ? payloadRecord.phone : payloadRecord.phone,
-    direction === "inbound" ? payloadRecord.lead_phone : payloadRecord.lead_phone,
-    direction === "inbound" ? getNestedValue(payloadRecord, ["metadata", "from"]) : getNestedValue(payloadRecord, ["metadata", "to"]),
-    direction === "inbound" ? getNestedValue(payloadRecord, ["body", "from"]) : getNestedValue(payloadRecord, ["body", "to"]),
-    direction === "inbound" ? getNestedValue(payloadRecord, ["body", "whatsappInboundMessage", "from"]) : getNestedValue(payloadRecord, ["body", "whatsappOutboundMessage", "to"]),
-    direction === "inbound" ? getNestedValue(providerRecord, ["from"]) : getNestedValue(providerRecord, ["to"]),
+    direction === "inbound" ? providerFromPhone : providerToPhone,
     payloadRecord.phone_e164,
     payloadRecord.phone,
+    payloadRecord.lead_phone,
     providerLinkedThread?.phone_e164
   );
   const phoneE164 = normalizeEsPhone(rawPhone);
