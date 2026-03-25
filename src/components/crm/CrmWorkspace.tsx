@@ -28,6 +28,7 @@ import { useProfile } from "@/lib/supabase/useProfile";
 import type { Appointment, Call, Json, Lead, LeadNextAction, LeadNote, WaMessage, WaThread } from "@/lib/types";
 import { CLINIC_TIMEZONE, formatClinicDate, formatClinicDateTime, formatClinicTime } from "@/lib/datetime/clinicTime";
 import { normalizeEsPhone } from "@/lib/leads/resolveLead";
+import { normalizeWhatsappMessageText, sanitizeWaMessageForDisplay } from "@/lib/whatsapp/message-normalization";
 import { cn } from "@/lib/utils/cn";
 
 type ManagedByFilter = "all" | "humano" | "IA" | "unassigned";
@@ -336,7 +337,7 @@ function getMessageChronologyRank(message: WaMessage) {
 }
 
 function normalizeMessageText(text?: string | null) {
-  return text?.replace(/\s+/g, " ").trim().toLowerCase() || "";
+  return normalizeWhatsappMessageText(text);
 }
 
 function sortConversationMessages(messages: WaMessage[]) {
@@ -743,7 +744,9 @@ export function CrmWorkspace() {
           return;
         }
 
-        messagesResultData = sanitizeConversationMessages((waMessagesResult || []) as WaMessage[]);
+        messagesResultData = sanitizeConversationMessages(
+          ((waMessagesResult || []) as WaMessage[]).map((message) => sanitizeWaMessageForDisplay(message))
+        );
       }
 
       setAppointments((appointmentsResult.data || []) as Appointment[]);

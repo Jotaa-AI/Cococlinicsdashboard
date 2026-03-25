@@ -8,6 +8,11 @@ import { useProfile } from "@/lib/supabase/useProfile";
 import { normalizeEsPhone } from "@/lib/leads/resolveLead";
 import type { Call, Lead, WaMessage, WaThread } from "@/lib/types";
 import { CLINIC_TIMEZONE, formatClinicDate, formatClinicDateTime, formatClinicTime } from "@/lib/datetime/clinicTime";
+import {
+  normalizeWhatsappMessageText,
+  sanitizeWaMessageForDisplay,
+  sanitizeWhatsappPreviewText,
+} from "@/lib/whatsapp/message-normalization";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -117,7 +122,7 @@ function getConversationDisplayName(conversation: ConversationListItem) {
 }
 
 function getConversationPreview(conversation: ConversationListItem) {
-  return conversation.lastMessageText || "Sin mensajes todavía";
+  return sanitizeWhatsappPreviewText(conversation.lastMessageText) || "Sin mensajes todavía";
 }
 
 function isHumanModeActive(conversation: ConversationListItem | null) {
@@ -130,7 +135,7 @@ function getConversationKey(thread: ThreadListItem) {
 }
 
 function normalizeMessageText(text?: string | null) {
-  return text?.replace(/\s+/g, " ").trim().toLowerCase() || "";
+  return normalizeWhatsappMessageText(text);
 }
 
 function getMessageChronologyRank(message: WaMessage) {
@@ -289,7 +294,8 @@ export function MessagesInbox() {
     const threadMessagesMap = new Map<string, WaMessage[]>();
     for (const message of (recentMessagesResult.data || []) as Array<Pick<WaMessage, "id" | "thread_id" | "direction" | "role" | "created_at" | "text">>) {
       const current = threadMessagesMap.get(message.thread_id) || [];
-      current.push({
+      current.push(
+        sanitizeWaMessageForDisplay({
         id: message.id,
         thread_id: message.thread_id,
         clinic_id: clinicId,
@@ -303,7 +309,8 @@ export function MessagesInbox() {
         delivery_status: null,
         metadata: {},
         created_at: message.created_at,
-      });
+        })
+      );
       threadMessagesMap.set(message.thread_id, current);
     }
 
@@ -332,7 +339,7 @@ export function MessagesInbox() {
         ...thread,
         lead,
         lastMessageAt: lastMessage?.created_at || null,
-        lastMessageText: lastMessage?.text || null,
+        lastMessageText: sanitizeWhatsappPreviewText(lastMessage?.text) || null,
         messagesCount: countByThread.get(thread.id) || 0,
       };
     });
@@ -462,7 +469,11 @@ export function MessagesInbox() {
     ]);
 
     const firstCall = (callByLeadResult.data as Call | null) || (callByPhoneResult.data as Call | null) || null;
-    setMessages(sanitizeConversationMessages(((messagesResult.data || []) as WaMessage[]).filter(Boolean)));
+    setMessages(
+      sanitizeConversationMessages(
+        ((messagesResult.data || []) as WaMessage[]).filter(Boolean).map((message) => sanitizeWaMessageForDisplay(message))
+      )
+    );
     setInitialCall({ call: firstCall, lead: selectedConversation.lead || null });
     setLoadingMessages(false);
   }, [clinicId, selectedConversation, supabase]);
@@ -578,7 +589,9 @@ export function MessagesInbox() {
         )
       );
       if (systemMessage) {
-        setMessages((current) => sanitizeConversationMessages([...current, systemMessage as WaMessage]));
+        setMessages((current) =>
+          sanitizeConversationMessages([...current, sanitizeWaMessageForDisplay(systemMessage as WaMessage)])
+        );
       }
       await loadThreads();
       await loadThreadDetail();
