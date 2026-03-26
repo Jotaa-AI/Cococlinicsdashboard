@@ -52,6 +52,19 @@ interface DraftEntryState {
   leadPhone: string;
 }
 
+interface CalendarMutationArg {
+  event: {
+    start: Date | null;
+    end: Date | null;
+    title: string;
+    extendedProps: {
+      sourceId: string;
+      entryType: EntryType;
+    };
+  };
+  revert: () => void;
+}
+
 function pad(value: number) {
   return String(value).padStart(2, "0");
 }
@@ -181,6 +194,8 @@ export function CalendarView() {
   const [draftEntry, setDraftEntry] = useState<DraftEntryState | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [formNotice, setFormNotice] = useState<string | null>(null);
+  const [surfaceError, setSurfaceError] = useState<string | null>(null);
+  const [surfaceNotice, setSurfaceNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const buildEvents = useCallback((appointments: Appointment[]) => {
@@ -319,6 +334,26 @@ export function CalendarView() {
     setDialogOpen(true);
   }, []);
 
+  const openEditDialogFromAppointment = useCallback((appointment: Appointment) => {
+    const start = new Date(appointment.start_at);
+    const end = new Date(appointment.end_at);
+
+    setDialogMode("edit");
+    setDraftEntry({
+      sourceId: appointment.id,
+      type: appointment.entry_type === "internal_block" ? "busy_block" : "appointment",
+      date: toClinicDateInputValue(start),
+      startTime: toClinicTimeInputValue(start),
+      endTime: toClinicTimeInputValue(end),
+      title: appointment.title || appointment.notes || "",
+      leadName: appointment.entry_type === "internal_block" ? "" : appointment.lead_name || "",
+      leadPhone: appointment.entry_type === "internal_block" ? "" : appointment.lead_phone || "",
+    });
+    setFormError(null);
+    setFormNotice(null);
+    setDialogOpen(true);
+  }, []);
+
   const handleDraftChange = useCallback(<K extends keyof DraftEntryState>(field: K, value: DraftEntryState[K]) => {
     setDraftEntry((prev) => (prev ? { ...prev, [field]: value } : prev));
   }, []);
@@ -331,10 +366,56 @@ export function CalendarView() {
     setLoading(false);
   }, []);
 
+  const applyCalendarMutation = useCallback(
+    async (arg: CalendarMutationArg, successMessage: string) => {
+      const start = arg.event.start;
+      const end = arg.event.end;
+      const sourceId = arg.event.extendedProps.sourceId;
+
+      if (!start || !end || !sourceId) {
+        arg.revert();
+        setSurfaceError("No se pudo interpretar el nuevo hueco de la cita.");
+        return;
+      }
+
+      setSurfaceError(null);
+      setSurfaceNotice(null);
+
+      try {
+        const response = await fetch("/api/appointments/reschedule", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            appointment_id: sourceId,
+            start_at: start.toISOString(),
+            end_at: end.toISOString(),
+            title: arg.event.title || undefined,
+          }),
+        });
+
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          arg.revert();
+          setSurfaceError(payload?.error || "No se pudo mover la cita en agenda.");
+          return;
+        }
+
+        setSurfaceNotice(successMessage);
+        await Promise.all([loadEvents(), loadUpcomingAppointments()]);
+      } catch {
+        arg.revert();
+        setSurfaceError("No se pudo mover la cita en agenda.");
+      }
+    },
+    [loadEvents, loadUpcomingAppointments]
+  );
+
   const handleSave = useCallback(async () => {
     if (!draftEntry) return;
 
     setFormError(null);
+    setSurfaceError(null);
+    setSurfaceNotice(null);
     const startIso = zonedDateTimeToUtcIso(draftEntry.date, draftEntry.startTime);
     const endIso = zonedDateTimeToUtcIso(draftEntry.date, draftEntry.endTime);
 
@@ -406,7 +487,8 @@ export function CalendarView() {
         }
 
         resetDialog();
-        loadEvents();
+        setSurfaceNotice(dialogMode === "edit" ? "Cita actualizada correctamente." : "Cita creada correctamente.");
+        await Promise.all([loadEvents(), loadUpcomingAppointments()]);
         return;
       } catch {
         setFormError("No se pudo guardar el cambio en agenda.");
@@ -454,13 +536,14 @@ export function CalendarView() {
       }
 
       resetDialog();
-      loadEvents();
+      setSurfaceNotice(dialogMode === "edit" ? "Bloqueo actualizado correctamente." : "Bloqueo creado correctamente.");
+      await Promise.all([loadEvents(), loadUpcomingAppointments()]);
     } catch {
       setFormError("No se pudo guardar el cambio en agenda.");
     } finally {
       setLoading(false);
     }
-  }, [dialogMode, draftEntry, loadEvents, resetDialog]);
+  }, [dialogMode, draftEntry, loadEvents, loadUpcomingAppointments, resetDialog]);
 
   const handleCancelAppointment = useCallback(async () => {
     if (!draftEntry?.sourceId || dialogMode !== "edit") {
@@ -469,6 +552,8 @@ export function CalendarView() {
 
     setFormError(null);
     setFormNotice(null);
+    setSurfaceError(null);
+    setSurfaceNotice(null);
 
     try {
       setLoading(true);
@@ -495,13 +580,14 @@ export function CalendarView() {
       }
 
       resetDialog();
-      loadEvents();
+      setSurfaceNotice(draftEntry.type === "appointment" ? "Cita cancelada correctamente." : "Bloqueo eliminado correctamente.");
+      await Promise.all([loadEvents(), loadUpcomingAppointments()]);
     } catch {
       setFormError("No se pudo cancelar la cita.");
     } finally {
       setLoading(false);
     }
-  }, [dialogMode, draftEntry, loadEvents, resetDialog]);
+  }, [dialogMode, draftEntry, loadEvents, loadUpcomingAppointments, resetDialog]);
 
   return (
     <div className="space-y-4">
@@ -539,8 +625,15 @@ export function CalendarView() {
       </div>
 
       <div className="rounded-3xl border border-border bg-white/70 p-4 text-sm text-muted-foreground">
-        Haz clic en un día o franja horaria para crear una cita o bloquear horas. Todas las altas se guardan en Supabase y se reflejan al instante.
+        Haz clic en un día o franja para crear una cita, haz clic sobre una cita existente para editarla o arrástrala para reprogramarla directamente. Todos los cambios se guardan en Supabase al momento.
       </div>
+
+      {surfaceError ? (
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{surfaceError}</div>
+      ) : null}
+      {surfaceNotice ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{surfaceNotice}</div>
+      ) : null}
 
       <FullCalendar
         ref={calendarRef}
@@ -553,8 +646,8 @@ export function CalendarView() {
         events={events}
         selectable
         selectMirror
-        editable={false}
-        eventDurationEditable={false}
+        editable
+        eventDurationEditable
         allDaySlot={false}
         slotDuration="00:30:00"
         snapDuration="00:30:00"
@@ -581,6 +674,22 @@ export function CalendarView() {
         select={handleSelect}
         dateClick={handleDateClick}
         eventClick={handleEventClick}
+        eventDrop={(arg) =>
+          applyCalendarMutation(
+            arg as unknown as CalendarMutationArg,
+            arg.event.extendedProps.entryType === "busy_block"
+              ? "Bloqueo reprogramado correctamente."
+              : "Cita reprogramada correctamente."
+          )
+        }
+        eventResize={(arg) =>
+          applyCalendarMutation(
+            arg as unknown as CalendarMutationArg,
+            arg.event.extendedProps.entryType === "busy_block"
+              ? "Bloqueo actualizado correctamente."
+              : "Duración de la cita actualizada."
+          )
+        }
         datesSet={(arg) => {
           setCalendarTitle(arg.view.title);
           setRange((prev) => {
@@ -625,8 +734,11 @@ export function CalendarView() {
                 </div>
 
                 <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">
-                    {formatAppointmentStatusLabel(appointment.status)}
+                  {formatAppointmentStatusLabel(appointment.status)}
                 </span>
+                <Button type="button" variant="outline" onClick={() => openEditDialogFromAppointment(appointment)}>
+                  Editar
+                </Button>
               </div>
             ))}
           </div>
