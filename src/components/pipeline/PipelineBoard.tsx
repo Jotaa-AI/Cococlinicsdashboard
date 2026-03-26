@@ -151,6 +151,17 @@ const FALLBACK_STAGES: LeadStageCatalog[] = [
     is_active: true,
   },
   {
+    stage_key: "visit_canceled",
+    pipeline_key: "closed",
+    pipeline_label_es: "Cerrados",
+    label_es: "Cita cancelada",
+    description_es: "Lead con cita cancelada",
+    pipeline_order: 3,
+    order_index: 15,
+    is_terminal: false,
+    is_active: true,
+  },
+  {
     stage_key: "post_visit_pending_decision",
     pipeline_key: "closed",
     pipeline_label_es: "Cerrados",
@@ -251,6 +262,7 @@ interface PipelineColumn {
     | "first_contact"
     | "active_conversation"
     | "visit_scheduled"
+    | "visit_canceled"
     | "visit_no_show"
     | "post_visit_pending_decision"
     | "post_visit_follow_up"
@@ -259,6 +271,7 @@ interface PipelineColumn {
   label: string;
   description: string;
   representativeStageKey: string;
+  readOnly?: boolean;
 }
 
 const SIMPLIFIED_PIPELINE_COLUMNS: PipelineColumn[] = [
@@ -279,6 +292,13 @@ const SIMPLIFIED_PIPELINE_COLUMNS: PipelineColumn[] = [
     label: "Cita agendada",
     description: "Visitas futuras confirmadas en agenda.",
     representativeStageKey: "visit_scheduled",
+  },
+  {
+    id: "visit_canceled",
+    label: "Citas canceladas",
+    description: "Cancelaciones registradas en citas que conviene revisar o recuperar.",
+    representativeStageKey: "visit_canceled",
+    readOnly: true,
   },
   {
     id: "visit_no_show",
@@ -324,6 +344,7 @@ const PIPELINE_COLUMN_FROM_STAGE: Record<string, PipelineColumn["id"]> = {
   whatsapp_followup_pending: "first_contact",
   whatsapp_failed_team_review: "active_conversation",
   visit_scheduled: "visit_scheduled",
+  visit_canceled: "visit_canceled",
   visit_no_show: "visit_no_show",
   post_visit_pending_decision: "post_visit_pending_decision",
   post_visit_follow_up: "post_visit_follow_up",
@@ -338,12 +359,15 @@ type ManagedByFilter = "all" | "humano" | "IA" | "unassigned";
 type LeadSignalSets = {
   noShowLeadIds: Set<string>;
   noShowPhones: Set<string>;
+  canceledLeadIds: Set<string>;
+  canceledPhones: Set<string>;
   repliedLeadIds: Set<string>;
   repliedPhones: Set<string>;
 };
 
 const REPLY_LOCKED_STAGE_KEYS = new Set([
   "visit_scheduled",
+  "visit_canceled",
   "visit_no_show",
   "post_visit_pending_decision",
   "post_visit_follow_up",
@@ -443,6 +467,7 @@ function LeadCard({ lead, onOpen }: LeadCardProps) {
         {lead.stage_key === "whatsapp_failed_team_review" ? (
           <Badge variant="warning">Revisión equipo</Badge>
         ) : null}
+        {lead.stage_key === "visit_canceled" ? <Badge variant="soft">Cancelada</Badge> : null}
         {lead.stage_key === "visit_no_show" ? <Badge variant="danger">No-show</Badge> : null}
         {lead.whatsapp_blocked ? (
           <Badge variant="warning">WhatsApp bloqueado</Badge>
@@ -504,7 +529,7 @@ function StageColumn({
   leads: Lead[];
   onOpen: (lead: Lead) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: column.id });
+  const { setNodeRef, isOver } = useDroppable({ id: column.id, disabled: Boolean(column.readOnly) });
   const tone = STAGE_TONE_ES[column.representativeStageKey] || {
     mood: "En curso",
     accent: "border-t-slate-300",
@@ -524,6 +549,9 @@ function StageColumn({
           <Badge variant={tone.badge}>{tone.mood}</Badge>
           <p className="truncate text-[11px] text-muted-foreground">{column.description}</p>
         </div>
+        {column.readOnly ? (
+          <p className="mt-2 text-[11px] text-muted-foreground">Columna automática según el estado de la cita.</p>
+        ) : null}
       </div>
 
       <div className="h-[calc(68vh-56px)] min-h-[444px] overflow-y-auto bg-muted/10 p-2 sm:h-[564px]">
@@ -566,6 +594,8 @@ export function PipelineBoard() {
   const [leadSignals, setLeadSignals] = useState<LeadSignalSets>({
     noShowLeadIds: new Set(),
     noShowPhones: new Set(),
+    canceledLeadIds: new Set(),
+    canceledPhones: new Set(),
     repliedLeadIds: new Set(),
     repliedPhones: new Set(),
   });
@@ -596,6 +626,14 @@ export function PipelineBoard() {
 
       if (hasNoShowSignal) {
         return "visit_no_show";
+      }
+
+      const hasCanceledSignal =
+        leadSignals.canceledLeadIds.has(lead.id) ||
+        (leadPhone ? leadSignals.canceledPhones.has(leadPhone) : false);
+
+      if (hasCanceledSignal) {
+        return "visit_canceled";
       }
 
       if (lead.status === "no_response") {
@@ -669,7 +707,7 @@ export function PipelineBoard() {
 
   const loadLeads = useCallback(async () => {
     if (!clinicId) return;
-    const [leadsResult, threadsResult, repliedMessagesResult, noShowAppointmentsResult] = await Promise.all([
+    const [leadsResult, threadsResult, repliedMessagesResult, noShowAppointmentsResult, canceledAppointmentsResult] = await Promise.all([
       supabase
         .from("leads")
         .select("*")
@@ -690,6 +728,11 @@ export function PipelineBoard() {
         .select("lead_id, lead_phone")
         .eq("clinic_id", clinicId)
         .eq("status", "no_show"),
+      supabase
+        .from("appointments")
+        .select("lead_id, lead_phone")
+        .eq("clinic_id", clinicId)
+        .eq("status", "canceled"),
     ]);
 
     if (!leadsResult.data) return;
@@ -734,9 +777,24 @@ export function PipelineBoard() {
       }
     }
 
+    const canceledLeadIds = new Set<string>();
+    const canceledPhones = new Set<string>();
+    for (const appointment of (canceledAppointmentsResult.data || []) as Array<{ lead_id: string | null; lead_phone: string | null }>) {
+      if (appointment.lead_id) {
+        canceledLeadIds.add(appointment.lead_id);
+      }
+
+      const phoneKey = getLeadPhoneKey(appointment.lead_phone);
+      if (phoneKey) {
+        canceledPhones.add(phoneKey);
+      }
+    }
+
     setLeadSignals({
       noShowLeadIds,
       noShowPhones,
+      canceledLeadIds,
+      canceledPhones,
       repliedLeadIds,
       repliedPhones,
     });
@@ -869,6 +927,7 @@ export function PipelineBoard() {
     const currentColumn = resolvePipelineColumnKey(currentLead);
     const nextColumn = PIPELINE_COLUMN_FROM_STAGE[newStage || ""] || null;
     if (!newStage || !nextColumn || nextColumn === currentColumn) return;
+    if (columnMap.get(nextColumn)?.readOnly) return;
 
     const newStatus = LEGACY_STATUS_FROM_STAGE[newStage] || currentLead.status;
     setLeads((prev) =>
@@ -1021,7 +1080,7 @@ export function PipelineBoard() {
       <div className="mb-4 rounded-xl border border-border bg-muted/20 p-3">
         <p className="text-sm font-semibold">Pipeline comercial simplificado</p>
         <p className="text-xs text-muted-foreground">
-          Ocho estados operativos para clínica: primer contacto, conversación, cita, no-show y cierre.
+          Nueve estados operativos para clínica: primer contacto, conversación, cita, cancelación, no-show y cierre.
         </p>
         <p className="mt-2 text-xs text-muted-foreground">
           Arrastra un lead entre columnas para moverlo manualmente y actualizar su estado en la base de datos.
@@ -1097,6 +1156,7 @@ export function PipelineBoard() {
                     {resolveStageKey(activeLead) === "whatsapp_failed_team_review" ? (
                       <Badge variant="warning">Revisión equipo</Badge>
                     ) : null}
+                    {resolveStageKey(activeLead) === "visit_canceled" ? <Badge variant="soft">Cancelada</Badge> : null}
                     {resolveStageKey(activeLead) === "visit_no_show" ? <Badge variant="danger">No-show</Badge> : null}
                   </div>
                 </Card>

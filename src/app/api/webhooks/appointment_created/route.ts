@@ -147,6 +147,22 @@ export async function POST(request: Request) {
     });
   }
 
+  if (resolvedLead.leadId && appointmentStatus === "canceled") {
+    await transitionLeadStage({
+      supabase,
+      clinicId,
+      leadId: resolvedLead.leadId,
+      toStageKey: "visit_canceled",
+      reason: "Cita marcada como cancelada desde webhook",
+      actorType: sourceChannel,
+      actorId: payload.call_id || null,
+      meta: {
+        appointment_id: appointment.id,
+        source_channel: sourceChannel,
+      },
+    });
+  }
+
   return NextResponse.json({
     ok: true,
     appointment_id: appointment.id,

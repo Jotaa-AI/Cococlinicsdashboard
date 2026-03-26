@@ -1498,6 +1498,7 @@ values
   ('whatsapp_followup_pending', 'whatsapp_ai', 'Agentes de WhatsApp', 'Seguimiento pendiente', 'Quedó pendiente respuesta del lead por WhatsApp', 2, 30, false, true),
   ('whatsapp_failed_team_review', 'whatsapp_ai', 'Agentes de WhatsApp', 'Revisión manual equipo', 'No se cerró por IA; se envía resumen al equipo', 2, 40, false, true),
   ('visit_scheduled', 'closed', 'Cerrados', 'Agendado', 'Cita confirmada en agenda', 3, 10, true, true),
+  ('visit_canceled', 'closed', 'Cerrados', 'Citas canceladas', 'Lead con cita cancelada', 3, 15, false, true),
   ('post_visit_pending_decision', 'closed', 'Cerrados', 'Pendiente decisión', 'Visitó la clínica y está valorando la propuesta', 3, 20, false, true),
   ('post_visit_follow_up', 'closed', 'Cerrados', 'Seguimiento post-visita', 'Requiere seguimiento comercial tras la visita', 3, 30, false, true),
   ('visit_no_show', 'closed', 'Cerrados', 'No asistió a cita', 'Lead con cita agendada que no acudió', 3, 35, false, true),
@@ -1693,6 +1694,7 @@ as $$
     when 'whatsapp_followup_pending' then 'whatsapp_sent'::lead_status
     when 'whatsapp_failed_team_review' then 'no_response'::lead_status
     when 'visit_scheduled' then 'visit_scheduled'::lead_status
+    when 'visit_canceled' then 'contacted'::lead_status
     when 'post_visit_pending_decision' then 'contacted'::lead_status
     when 'post_visit_follow_up' then 'contacted'::lead_status
     when 'visit_no_show' then 'contacted'::lead_status
@@ -1945,6 +1947,18 @@ begin
       and clinic_id = new.clinic_id
       and (
         stage_key is distinct from 'visit_no_show'
+        or status is distinct from 'contacted'
+      );
+  elsif new.status = 'canceled'::appointment_status then
+    update leads
+    set stage_key = 'visit_canceled',
+        status = 'contacted',
+        next_action_at = null,
+        updated_at = now()
+    where id = new.lead_id
+      and clinic_id = new.clinic_id
+      and (
+        stage_key is distinct from 'visit_canceled'
         or status is distinct from 'contacted'
       );
   elsif new.status in ('scheduled', 'done') then

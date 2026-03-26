@@ -78,6 +78,12 @@ export const STAGE_TONE_ES: Record<string, StageTone> = {
     badge: "success",
     hint: "Cita cerrada",
   },
+  visit_canceled: {
+    mood: "Cancelada",
+    accent: "border-t-slate-400",
+    badge: "default",
+    hint: "La cita se canceló y conviene revisar si se recupera",
+  },
   post_visit_pending_decision: {
     mood: "Pendiente",
     accent: "border-t-amber-400",
@@ -134,6 +140,7 @@ export const LEGACY_STATUS_FROM_STAGE: Record<string, string> = {
   whatsapp_followup_pending: "whatsapp_sent",
   whatsapp_failed_team_review: "no_response",
   visit_scheduled: "visit_scheduled",
+  visit_canceled: "contacted",
   post_visit_pending_decision: "contacted",
   post_visit_follow_up: "contacted",
   visit_no_show: "contacted",

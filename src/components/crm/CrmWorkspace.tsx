@@ -142,6 +142,7 @@ function stageBadgeVariant(stageKey?: string | null) {
   if (!stageKey) return "default" as const;
   if (stageKey === "client_closed") return "success" as const;
   if (stageKey === "visit_no_show" || stageKey === "post_visit_not_closed") return "danger" as const;
+  if (stageKey === "visit_canceled") return "default" as const;
   if (stageKey === "visit_scheduled" || stageKey === "post_visit_follow_up") return "warning" as const;
   return "soft" as const;
 }
