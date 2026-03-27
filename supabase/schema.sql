@@ -1706,6 +1706,37 @@ create index if not exists lead_no_reply_alerts_due_idx
 create index if not exists lead_no_reply_alerts_lead_idx
   on lead_no_reply_alerts (lead_id, anchor_created_at desc);
 
+create or replace function public.normalize_no_reply_alert_send_at(p_send_at timestamptz)
+returns timestamptz
+language plpgsql
+stable
+set search_path = public
+as $$
+declare
+  v_local timestamp;
+  v_date date;
+  v_time time;
+begin
+  if p_send_at is null then
+    return null;
+  end if;
+
+  v_local := p_send_at at time zone 'Europe/Madrid';
+  v_date := v_local::date;
+  v_time := v_local::time;
+
+  if v_time < time '09:00' then
+    return (v_date + time '09:00') at time zone 'Europe/Madrid';
+  end if;
+
+  if v_time > time '22:00' then
+    return ((v_date + 1) + time '09:00') at time zone 'Europe/Madrid';
+  end if;
+
+  return p_send_at;
+end;
+$$;
+
 create or replace function public.sync_lead_no_reply_alerts_from_lead()
 returns trigger
 language plpgsql
@@ -1777,10 +1808,10 @@ begin
     now()
   from (
     values
-      ('3h'::text, new.created_at + interval '3 hours'),
-      ('24h'::text, new.created_at + interval '24 hours'),
-      ('4d'::text, new.created_at + interval '4 days'),
-      ('8d'::text, new.created_at + interval '8 days')
+      ('3h'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '3 hours')),
+      ('24h'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '24 hours')),
+      ('4d'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '4 days')),
+      ('8d'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '8 days'))
   ) as schedule(alert_key, send_at)
   on conflict (lead_id, alert_key, anchor_created_at) do update
   set
@@ -2124,10 +2155,10 @@ begin
     from eligible e
     cross join lateral (
       values
-        ('3h'::text, p_first_send_at),
-        ('24h'::text, p_first_send_at + interval '21 hours'),
-        ('4d'::text, p_first_send_at + interval '3 days 21 hours'),
-        ('8d'::text, p_first_send_at + interval '7 days 21 hours')
+        ('3h'::text, public.normalize_no_reply_alert_send_at(p_first_send_at)),
+        ('24h'::text, public.normalize_no_reply_alert_send_at(p_first_send_at + interval '21 hours')),
+        ('4d'::text, public.normalize_no_reply_alert_send_at(p_first_send_at + interval '3 days 21 hours')),
+        ('8d'::text, public.normalize_no_reply_alert_send_at(p_first_send_at + interval '7 days 21 hours'))
     ) as schedule(alert_key, send_at)
     returning lead_id
   )

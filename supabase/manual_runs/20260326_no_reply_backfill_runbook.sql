@@ -7,7 +7,7 @@
 -- 1. Ejecuta los bloques en orden en el SQL Editor de Supabase.
 -- 2. Los pasos 1 y 2 son de infraestructura y solo se ejecutan una vez.
 -- 3. El paso 4 es solo preview para revisar cuántos leads entrarían.
--- 4. El paso 5 es el disparo real del backfill para mañana a las 09:00.
+-- 4. El paso 5 es el disparo real del backfill con la primera repesca a una hora futura que elijas.
 --
 -- IMPORTANTE
 -- - Si alguna migración ya la ejecutaste antes, ese bloque debería ser idempotente o no hacer nada.
@@ -51,6 +51,37 @@ create index if not exists lead_no_reply_alerts_due_idx
 
 create index if not exists lead_no_reply_alerts_lead_idx
   on public.lead_no_reply_alerts (lead_id, anchor_created_at desc);
+
+create or replace function public.normalize_no_reply_alert_send_at(p_send_at timestamptz)
+returns timestamptz
+language plpgsql
+immutable
+set search_path = public
+as $$
+declare
+  v_local timestamp;
+  v_local_date date;
+  v_local_time time;
+begin
+  if p_send_at is null then
+    return null;
+  end if;
+
+  v_local := p_send_at at time zone 'Europe/Madrid';
+  v_local_date := v_local::date;
+  v_local_time := v_local::time;
+
+  if v_local_time < time '09:00' then
+    return ((v_local_date::timestamp + time '09:00') at time zone 'Europe/Madrid');
+  end if;
+
+  if v_local_time > time '22:00' then
+    return ((((v_local_date + 1)::timestamp) + time '09:00') at time zone 'Europe/Madrid');
+  end if;
+
+  return p_send_at;
+end;
+$$;
 
 create or replace function public.sync_lead_no_reply_alerts_from_lead()
 returns trigger
@@ -121,10 +152,10 @@ begin
     now()
   from (
     values
-      ('3h'::text, new.created_at + interval '3 hours'),
-      ('24h'::text, new.created_at + interval '24 hours'),
-      ('4d'::text, new.created_at + interval '4 days'),
-      ('8d'::text, new.created_at + interval '8 days')
+      ('3h'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '3 hours')),
+      ('24h'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '24 hours')),
+      ('4d'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '4 days')),
+      ('8d'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '8 days'))
   ) as schedule(alert_key, send_at)
   on conflict (lead_id, alert_key, anchor_created_at) do update
   set
@@ -423,6 +454,37 @@ alter table public.lead_no_reply_alerts
   add constraint lead_no_reply_alerts_origin_check
   check (origin in ('auto', 'backfill'));
 
+create or replace function public.normalize_no_reply_alert_send_at(p_send_at timestamptz)
+returns timestamptz
+language plpgsql
+immutable
+set search_path = public
+as $$
+declare
+  v_local timestamp;
+  v_local_date date;
+  v_local_time time;
+begin
+  if p_send_at is null then
+    return null;
+  end if;
+
+  v_local := p_send_at at time zone 'Europe/Madrid';
+  v_local_date := v_local::date;
+  v_local_time := v_local::time;
+
+  if v_local_time < time '09:00' then
+    return ((v_local_date::timestamp + time '09:00') at time zone 'Europe/Madrid');
+  end if;
+
+  if v_local_time > time '22:00' then
+    return ((((v_local_date + 1)::timestamp) + time '09:00') at time zone 'Europe/Madrid');
+  end if;
+
+  return p_send_at;
+end;
+$$;
+
 create or replace function public.sync_lead_no_reply_alerts_from_lead()
 returns trigger
 language plpgsql
@@ -494,10 +556,10 @@ begin
     now()
   from (
     values
-      ('3h'::text, new.created_at + interval '3 hours'),
-      ('24h'::text, new.created_at + interval '24 hours'),
-      ('4d'::text, new.created_at + interval '4 days'),
-      ('8d'::text, new.created_at + interval '8 days')
+      ('3h'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '3 hours')),
+      ('24h'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '24 hours')),
+      ('4d'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '4 days')),
+      ('8d'::text, public.normalize_no_reply_alert_send_at(new.created_at + interval '8 days'))
   ) as schedule(alert_key, send_at)
   on conflict (lead_id, alert_key, anchor_created_at) do update
   set
@@ -793,10 +855,10 @@ begin
     from eligible e
     cross join lateral (
       values
-        ('3h'::text, p_first_send_at),
-        ('24h'::text, p_first_send_at + interval '21 hours'),
-        ('4d'::text, p_first_send_at + interval '3 days 21 hours'),
-        ('8d'::text, p_first_send_at + interval '7 days 21 hours')
+        ('3h'::text, public.normalize_no_reply_alert_send_at(p_first_send_at)),
+        ('24h'::text, public.normalize_no_reply_alert_send_at(p_first_send_at + interval '21 hours')),
+        ('4d'::text, public.normalize_no_reply_alert_send_at(p_first_send_at + interval '3 days 21 hours')),
+        ('8d'::text, public.normalize_no_reply_alert_send_at(p_first_send_at + interval '7 days 21 hours'))
     ) as schedule(alert_key, send_at)
     returning lead_id
   )
@@ -818,6 +880,15 @@ end;
 $$;
 
 grant execute on function public.rpc_backfill_existing_lead_no_reply_alerts(uuid, timestamptz) to authenticated, service_role;
+
+
+-- Normaliza también cualquier alerta pendiente que ya exista para respetar la ventana 09:00-22:00
+update public.lead_no_reply_alerts
+set
+  send_at = public.normalize_no_reply_alert_send_at(send_at),
+  updated_at = now()
+where status = 'pending';
+
 
 
 -- ============================================================
@@ -977,12 +1048,13 @@ limit 50;
 -- PASO 5. LANZAR EL BACKFILL REAL
 -- Esto SI crea las alertas para los leads actuales elegibles.
 -- Programación elegida:
---   primer aviso equivalente al de 3h -> mañana 2026-03-27 a las 09:00 Europe/Madrid
+--   primer aviso equivalente al de 3h -> usa una hora futura dentro de la ventana 09:00-22:00 Europe/Madrid
+--   todos los envíos se normalizan automáticamente para no salir antes de las 09:00 ni después de las 22:00
 -- ============================================================
 select *
 from public.rpc_backfill_existing_lead_no_reply_alerts(
   '38bdef88-b4da-483d-a03b-6043e4707659'::uuid,
-  '2026-03-27T09:00:00+01:00'::timestamptz
+  date_trunc('day', now() at time zone 'Europe/Madrid')::timestamp at time zone 'Europe/Madrid' + interval '9 hours' + case when now() <= ((date_trunc('day', now() at time zone 'Europe/Madrid')::timestamp + time '09:00') at time zone 'Europe/Madrid') then interval '0 hours' else interval '1 day' end
 );
 
 
